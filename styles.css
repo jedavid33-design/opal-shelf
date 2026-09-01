@@ -106,6 +106,9 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
 .detail-head .cover { width: 150px; }
 .history-list { display: grid; gap: 10px; }
 .history-item { padding: 13px; border-left: 4px solid var(--opal); border-radius: 8px; background: rgba(255,255,255,.65); }
+.history-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.history-actions { display: flex; gap: 7px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+.read-notes { margin: 9px 0 0; color: var(--ink); white-space: pre-wrap; }
 .tag-row { display: flex; gap: 7px; flex-wrap: wrap; }
 
 .empty { padding: 38px 24px; border: 1px dashed #bba995; border-radius: 18px; text-align: center; color: var(--muted); background: rgba(255,255,255,.35); }
@@ -143,6 +146,8 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
   .detail-head h1 { font-size: 1.5rem; }
   .read-card { grid-template-columns: 76px 1fr; }
   .read-card .cover { width: 76px; }
+  .history-summary { display: block; }
+  .history-actions { justify-content: flex-start; margin-top: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
