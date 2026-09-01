@@ -1,0 +1,12 @@
+{
+  "name": "Opal Shelf",
+  "short_name": "Shelf",
+  "description": "A private virtual bookshelf and reading companion.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3ede3",
+  "theme_color": "#32271f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
