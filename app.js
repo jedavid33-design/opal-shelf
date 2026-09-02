@@ -8,8 +8,13 @@ const checkinDialog = document.querySelector("#checkin-dialog");
 const esc = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]));
 const dateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
 const fmtDuration = (seconds) => {
-  const mins = Math.max(0, Math.round(Number(seconds || 0) / 60));
-  return mins < 60 ? `${mins}m` : `${Math.floor(mins/60)}h ${String(mins%60).padStart(2,"0")}m`;
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (hours) return `${hours}h ${minutes}m ${remainingSeconds}s`;
+  if (minutes) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
 };
 const longDuration = (seconds) => {
   const total = Math.max(0, Math.floor(Number(seconds || 0)));
@@ -86,7 +91,7 @@ function homeView() {
   const current = state.data.reads.filter((read) => read.state === "active");
   const dash = state.data.dashboard;
   const daily = dash.dailyGoal;
-  const dailyNow = daily?.goal_type === "pages" ? dash.todayPages : Math.round(dash.todaySeconds/60);
+  const dailyNow = daily?.goal_type === "pages" ? dash.todayPages : Math.floor(dash.todaySeconds/60);
   const dailyText = daily ? `${dailyNow} / ${daily.amount} ${daily.goal_type}` : "Not set";
   return `
     <div class="page-head"><div><p class="eyebrow">Today · ${esc(fmtDate(state.data.today))}</p><h1>Current Reads</h1><p class="subtle">Every book you’re reading gets equal room here.</p></div></div>
@@ -178,7 +183,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.2</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.3</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -245,7 +250,10 @@ function bookFields(book = {}) {
   </div>`;
 }
 
-function field(label,name,value="",type="text",required=false) { return `<div class="field"><label for="${name}">${esc(label)}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value??"")}" ${required?"required":""}></div>`; }
+function field(label,name,value="",type="text",required=false) {
+  const decimalSpeed = name === "listening_speed" ? ` step="0.05" min="0.05" inputmode="decimal"` : "";
+  return `<div class="field"><label for="${name}">${esc(label)}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value??"")}"${decimalSpeed} ${required?"required":""}></div>`;
+}
 
 async function searchBooks(event) {
   event.preventDefault();

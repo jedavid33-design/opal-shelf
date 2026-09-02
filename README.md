@@ -1,4 +1,4 @@
-# Opal Shelf v0.0.2 — GitHub Pages frontend
+# Opal Shelf v0.0.3 — GitHub Pages frontend
 
 This is the Opal Shelf v0.0.1 progressive web app.
 
@@ -24,7 +24,16 @@ If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of t
 
 The app can then be added to the iPhone or iPad home screen from Safari.
 
-## v0.0.2 update order
+## v0.0.3 polish update
+
+Replace the GitHub repository files with this ZIP's contents. No Worker update or D1 migration is required.
+
+This release:
+
+- accepts decimal listening speeds in 0.05× increments, including 1.7×
+- sums stored session seconds first and displays exact totals such as `4m 23s` or `1h 12m 8s`
+
+## Previous v0.0.2 update order
 
 1. Run the included `0002_readthrough_management.sql` migration from the Worker ZIP against `opal-shelf-db`.
 2. Replace the Worker with the flat `worker.js` from the Worker ZIP.
