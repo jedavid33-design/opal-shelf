@@ -22,6 +22,7 @@ const longDuration = (seconds) => {
   return `${hours ? `${hours}:` : ""}${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
 };
 const fmtDate = (key) => key ? new Date(`${key}T12:00:00`).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}) : "Present";
+const addDateKey = (key, days) => { const [year,month,day]=key.split("-").map(Number); return new Date(Date.UTC(year,month-1,day+days)).toISOString().slice(0,10); };
 const authors = (book) => book.authors?.join(", ") || "Unknown author";
 const runtimeFromFields = (hours, minutes) => Math.max(0,Number(hours||0)*3600+Number(minutes||0)*60);
 const cover = (book, className = "cover") => book.cover_url
@@ -55,6 +56,10 @@ function lifetimeSeconds(bookId) { return state.data.sessions.filter((session) =
 function formatLabel(format) { return ({ print:"Physical", ebook:"Ebook", audiobook:"Audiobook", other:"Other" })[format] || "Other"; }
 function readLabel(read) { return Number(read.read_number) === 1 ? "Read #1" : `Reread #${Number(read.read_number)-1}`; }
 function readDateRange(read) { return `${fmtDate(read.start_date)}–${read.finish_date ? fmtDate(read.finish_date) : "Present"}`; }
+function recentActivityTime(read) {
+  const sessionTimes=state.data.sessions.filter((session)=>session.read_id===read.id).map((session)=>new Date(session.started_at).getTime()).filter(Number.isFinite);
+  return Math.max(new Date(read.updated_at||read.created_at||read.start_date).getTime()||0,...sessionTimes,0);
+}
 function progress(read, book) {
   if (!read) return 0;
   if (read.progress_percent != null) return Math.min(100,Math.max(0,Number(read.progress_percent)));
@@ -63,13 +68,15 @@ function progress(read, book) {
   return read.state === "finished" ? 100 : 0;
 }
 
-async function refresh({ checkins = false } = {}) {
+async function refresh({ checkins = false, focusReadId = null, reopenBookId = null } = {}) {
   state.data = await api(`/api/bootstrap?date=${dateKey()}`);
   state.activeTimer = state.data.sessions.find((session) => !session.ended_at) || null;
   render();
   updateTimerLabels();
   clearInterval(state.timerTick);
   if (state.activeTimer) state.timerTick = setInterval(updateTimerLabels, 1000);
+  if (reopenBookId) openBook(reopenBookId);
+  else if (focusReadId) requestAnimationFrame(()=>document.querySelector(`[data-read-card="${CSS.escape(focusReadId)}"]`)?.scrollIntoView({block:"nearest",inline:"nearest"}));
   if (checkins) await loadPendingCheckins();
 }
 
@@ -83,12 +90,12 @@ function nav(view) {
 
 function render() {
   if (!state.data) return;
-  app.innerHTML = state.view === "home" ? homeView() : state.view === "shelf" ? shelfView() : state.view === "goals" ? goalsView() : settingsView();
+  app.innerHTML = state.view === "home" ? homeView() : state.view === "history" ? dailyHistoryView() : state.view === "shelf" ? shelfView() : state.view === "goals" ? goalsView() : settingsView();
   bindView();
 }
 
 function homeView() {
-  const current = state.data.reads.filter((read) => read.state === "active");
+  const current = state.data.reads.filter((read) => read.state === "active").sort((a,b)=>recentActivityTime(b)-recentActivityTime(a));
   const dash = state.data.dashboard;
   const daily = dash.dailyGoal;
   const dailyNow = daily?.goal_type === "pages" ? dash.todayPages : Math.floor(dash.todaySeconds/60);
@@ -97,7 +104,7 @@ function homeView() {
     <div class="page-head"><div><p class="eyebrow">Today · ${esc(fmtDate(state.data.today))}</p><h1>Current Reads</h1><p class="subtle">Every book you’re reading gets equal room here.</p></div></div>
     ${current.length ? `<div class="current-strip">${current.map(readCard).join("")}</div>` : emptyState("📚","Your current shelf is waiting","Add a book, then start your first read-through.","Add Book")}
     <section class="section" aria-labelledby="dashboard-title">
-      <div class="section-title"><h2 id="dashboard-title">Reading dashboard</h2></div>
+      <div class="section-title"><h2 id="dashboard-title">Reading dashboard</h2><button class="button ghost small" data-nav="history">View Daily History →</button></div>
       <div class="dashboard">
         ${stat(fmtDuration(dash.todaySeconds),"Reading today")}
         ${stat(`${dash.streak.current} day${dash.streak.current===1?"":"s"}`,`Current streak · best ${dash.streak.longest}`)}
@@ -117,7 +124,8 @@ function readCard(read) {
   const totalPages = read.page_count_snapshot ?? book.page_count;
   let progressLabel = `${Math.round(pct)}% complete`;
   if ((read.format === "print" || read.format === "ebook" || read.format === "other") && read.progress_page != null) progressLabel = `Page ${read.progress_page}${totalPages ? ` of ${totalPages}` : ""}`;
-  return `<article class="read-card">
+  if(read.format==="audiobook"&&read.audiobook_runtime_seconds_snapshot)progressLabel=`${formatAudioPosition(read.audiobook_runtime_seconds_snapshot*pct/100)} · ${Math.round(pct)}% complete`;
+  return `<article class="read-card" data-read-card="${read.id}">
     <button class="ghost" data-book="${book.id}" aria-label="Open ${esc(book.title)}">${cover(book)}</button>
     <div>
       <span class="format-chip">${esc(formatLabel(read.format))}</span>
@@ -133,6 +141,77 @@ function readCard(read) {
       <button class="button" data-edit-read="${read.id}">Edit Read-through</button>
     </div>
   </article>`;
+}
+
+function dailyHistoryRows() {
+  const days=new Map();
+  const ensureDay=(key)=>{
+    if(!days.has(key))days.set(key,{date:key,totalSeconds:0,pages:0,contributions:new Map()});
+    return days.get(key);
+  };
+  state.data.sessions.filter((session)=>session.ended_at).forEach((session)=>{
+    const day=ensureDay(session.local_date);
+    const seconds=Number(session.duration_seconds||0);
+    day.totalSeconds+=seconds;
+    if(!day.contributions.has(session.read_id))day.contributions.set(session.read_id,{readId:session.read_id,bookId:session.book_id,seconds:0,count:0,speeds:new Set(),checkin:null});
+    const contribution=day.contributions.get(session.read_id);
+    contribution.seconds+=seconds;
+    contribution.count+=1;
+    if(session.listening_speed!=null)contribution.speeds.add(Number(session.listening_speed));
+  });
+  state.data.checkins.forEach((checkin)=>{
+    const day=days.get(checkin.session_date);
+    if(!day)return;
+    day.pages+=Number(checkin.pages_read||0);
+    if(!day.contributions.has(checkin.read_id))day.contributions.set(checkin.read_id,{readId:checkin.read_id,bookId:checkin.book_id,seconds:0,count:0,speeds:new Set(),checkin:null});
+    day.contributions.get(checkin.read_id).checkin=checkin;
+  });
+  return [...days.values()].sort((a,b)=>b.date.localeCompare(a.date));
+}
+
+function dailyGoalForDate(day) {
+  return [...state.data.goals].filter((goal)=>goal.effective_date<=day.date).sort((a,b)=>b.effective_date.localeCompare(a.effective_date))[0]||null;
+}
+
+function dayGoalLine(day) {
+  const goal=dailyGoalForDate(day);
+  if(!goal)return "No daily goal was set";
+  if(goal.paused)return "Daily goal was paused";
+  const actual=goal.goal_type==="minutes"?day.totalSeconds:day.pages;
+  const target=goal.goal_type==="minutes"?Number(goal.amount)*60:Number(goal.amount);
+  const met=actual>=target;
+  if(goal.goal_type==="minutes")return `${goal.amount}m goal • ${met?"Met":`${fmtDuration(target-actual)} short`}`;
+  return `${goal.amount} page goal • ${met?"Met":`${target-actual} pages short`}`;
+}
+
+function progressChangeLine(contribution,read,book) {
+  const checkin=contribution.checkin;
+  if(!checkin)return "";
+  const parts=[];
+  if(checkin.previous_page!=null&&checkin.new_page!=null)parts.push(`Page ${checkin.previous_page} → ${checkin.new_page}${Number(checkin.pages_read)>0?` (+${checkin.pages_read})`:""}`);
+  if(checkin.previous_percent!=null&&checkin.new_percent!=null) {
+    parts.push(`${Number(checkin.previous_percent).toFixed(1).replace(/\.0$/,"")}% → ${Number(checkin.new_percent).toFixed(1).replace(/\.0$/,"")}%`);
+    const runtime=Number(read?.audiobook_runtime_seconds_snapshot??book?.audiobook_runtime_seconds??0);
+    const speed=Number(checkin.listening_speed||0);
+    const delta=Math.max(0,Number(checkin.new_percent)-Number(checkin.previous_percent));
+    if(read?.format==="audiobook"&&runtime&&speed&&delta)parts.push(`about ${fmtDuration(runtime*delta/100/speed)} actual at ${speed}×`);
+  }
+  return parts.join(" • ");
+}
+
+function dailyHistoryView() {
+  const rows=dailyHistoryRows();
+  return `<div class="page-head"><div><p class="eyebrow">Reading Dashboard</p><h1>Daily Progress</h1><p class="subtle">Exact completed-session totals, newest first.</p></div><button class="button" data-nav="home">← Home</button></div>
+    ${rows.length?`<div class="daily-history">${rows.map((day)=>{
+      const relative=day.date===state.data.today?"Today":day.date===addDateKey(state.data.today,-1)?"Yesterday":new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined,{weekday:"long"});
+      const contributions=[...day.contributions.values()].sort((a,b)=>b.seconds-a.seconds);
+      return `<section class="day-card"><header><div><p class="eyebrow">${esc(relative)}</p><h2>${esc(fmtDate(day.date))}</h2></div><div class="day-total"><strong>${fmtDuration(day.totalSeconds)}</strong><span>${esc(dayGoalLine(day))}</span></div></header><div class="day-contributions">${contributions.map((item)=>{
+        const read=state.data.reads.find((candidate)=>candidate.id===item.readId),book=bookById(item.bookId);
+        const speeds=[...item.speeds].sort((a,b)=>a-b);
+        const progressLine=progressChangeLine(item,read,book);
+        return `<article class="day-book"><div><strong>${esc(book?.title||"Unknown book")}</strong><span>${read?esc(readLabel(read)):"Read-through"} • ${item.count} session${item.count===1?"":"s"}${speeds.length?` • ${speeds.join("× / ")}×`:""}</span>${progressLine?`<small>${esc(progressLine)}</small>`:""}</div><b>${fmtDuration(item.seconds)}</b></article>`;
+      }).join("")}</div></section>`;
+    }).join("")}</div>`:emptyState("◷","No completed sessions yet","Finished timer sessions will appear here by local calendar day.","")}`;
 }
 
 function recentShelf() {
@@ -183,7 +262,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.3</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.4</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -200,7 +279,7 @@ function bindView() {
   app.querySelectorAll("[data-progress]").forEach((el)=>el.addEventListener("click",()=>openProgress(el.dataset.progress)));
   app.querySelectorAll("[data-edit-read]").forEach((el)=>el.addEventListener("click",()=>openEditRead(el.dataset.editRead)));
   app.querySelectorAll("[data-finish-read]").forEach((el)=>el.addEventListener("click",()=>finishReadFromCard(el.dataset.finishRead)));
-  app.querySelectorAll("[data-timer-action]").forEach((el)=>el.addEventListener("click",()=>timerAction(el.dataset.timerAction,el.dataset.read)));
+  app.querySelectorAll("[data-timer-action]").forEach((el)=>el.addEventListener("click",()=>timerAction(el.dataset.timerAction,el.dataset.read,{focusReadId:el.dataset.read})));
   document.querySelector("#new-shelf")?.addEventListener("click",()=>shelfForm());
   app.querySelectorAll("[data-rename-shelf]").forEach((el)=>el.addEventListener("click",()=>shelfForm(el.dataset.renameShelf)));
   app.querySelectorAll("[data-delete-shelf]").forEach((el)=>el.addEventListener("click",()=>deleteShelf(el.dataset.deleteShelf)));
@@ -215,11 +294,11 @@ function updateTimerLabels() {
   document.querySelectorAll("[data-timer]").forEach((el)=>el.textContent=longDuration(seconds));
 }
 
-async function timerAction(action,readId) {
+async function timerAction(action,readId,refreshOptions={}) {
   try {
     if (action === "start") await api("/api/sessions/start",{method:"POST",body:JSON.stringify({read_id:readId,local_date:dateKey(),started_at:new Date().toISOString()})});
     else await api(`/api/sessions/${state.activeTimer.id}/stop`,{method:"POST",body:JSON.stringify({ended_at:new Date().toISOString()})});
-    await refresh();
+    await refresh(refreshOptions);
     toast(action === "start" ? "Reading timer started" : "Session saved");
   } catch (error) { toast(error.message); }
 }
@@ -252,7 +331,39 @@ function bookFields(book = {}) {
 
 function field(label,name,value="",type="text",required=false) {
   const decimalSpeed = name === "listening_speed" ? ` step="0.05" min="0.05" inputmode="decimal"` : "";
-  return `<div class="field"><label for="${name}">${esc(label)}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value??"")}"${decimalSpeed} ${required?"required":""}></div>`;
+  const decimalPercent = ["percent","progress_percent","starting_percent"].includes(name) ? ` step="0.1" min="0" max="100" inputmode="decimal"` : "";
+  return `<div class="field"><label for="${name}">${esc(label)}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value??"")}"${decimalSpeed}${decimalPercent} ${required?"required":""}></div>`;
+}
+
+function formatAudioPosition(seconds) {
+  const totalMinutes=Math.max(0,Math.round(Number(seconds||0)/60));
+  return `${Math.floor(totalMinutes/60)}:${String(totalMinutes%60).padStart(2,"0")}`;
+}
+
+function parseAudioPosition(value) {
+  const match=String(value||"").trim().match(/^(\d+):([0-5]\d)$/);
+  return match ? (Number(match[1])*60+Number(match[2]))*60 : null;
+}
+
+function bindAudioProgress(form,runtime,{percentName="percent",positionName="content_position",breakdownId="audio-progress-breakdown"}={}) {
+  const percentInput=form.elements[percentName],positionInput=form.elements[positionName],speedInput=form.elements.listening_speed;
+  if(!runtime||!percentInput||!positionInput)return;
+  const updateBreakdown=()=>{const target=document.getElementById(breakdownId);if(target)target.innerHTML=audioBreakdown(runtime,Number(percentInput.value||0),Number(speedInput?.value||1));};
+  positionInput.addEventListener("input",()=>{
+    if(!positionInput.value.trim()){positionInput.setCustomValidity("");return;}
+    const seconds=parseAudioPosition(positionInput.value);
+    if(seconds==null||seconds>runtime){positionInput.setCustomValidity(`Use h:mm up to ${formatAudioPosition(runtime)}`);return;}
+    positionInput.setCustomValidity("");
+    percentInput.value=String(Math.round(seconds/runtime*10000)/100);
+    updateBreakdown();
+  });
+  percentInput.addEventListener("input",()=>{
+    const percent=Math.min(100,Math.max(0,Number(percentInput.value||0)));
+    positionInput.value=formatAudioPosition(runtime*percent/100);
+    positionInput.setCustomValidity("");
+    updateBreakdown();
+  });
+  speedInput?.addEventListener("input",updateBreakdown);
 }
 
 async function searchBooks(event) {
@@ -300,12 +411,12 @@ function openBook(bookId) {
       <button class="button" data-edit-read="${active.id}">Edit Read-through</button>`}</div>
     <section class="section"><h2>Custom shelves</h2>${state.data.shelves.length?state.data.shelves.map((shelf)=>`<label class="checkbox"><input type="checkbox" data-shelf-membership="${shelf.id}" ${shelfIds.includes(shelf.id)?"checked":""}> ${esc(shelf.name)}</label>`).join(""):`<p class="subtle">Create a custom shelf from the Shelf tab.</p>`}</section>
     <section class="section"><h2>Reading history</h2><div class="history-list">${history}</div></section>`;
-  bookDialog.showModal();
+  if(!bookDialog.open)bookDialog.showModal();
   document.querySelector("#book-dialog-content [data-close]").addEventListener("click",()=>bookDialog.close());
   document.querySelector("#edit-book").addEventListener("click",()=>{bookDialog.close();openEditBook(book);});
   document.querySelector("#start-read")?.addEventListener("click",()=>{bookDialog.close();openStartRead(book);});
   document.querySelector("#book-dialog-content [data-progress]")?.addEventListener("click",(event)=>{bookDialog.close();openProgress(event.currentTarget.dataset.progress);});
-  document.querySelector("#book-dialog-content [data-dialog-timer]")?.addEventListener("click",async(event)=>{const action=state.activeTimer?.read_id===event.currentTarget.dataset.dialogTimer?"stop":"start";bookDialog.close();await timerAction(action,event.currentTarget.dataset.dialogTimer);});
+  document.querySelector("#book-dialog-content [data-dialog-timer]")?.addEventListener("click",async(event)=>{const action=state.activeTimer?.read_id===event.currentTarget.dataset.dialogTimer?"stop":"start";await timerAction(action,event.currentTarget.dataset.dialogTimer,{reopenBookId:book.id});});
   document.querySelector("#book-dialog-content [data-dialog-finish]")?.addEventListener("click",(event)=>{bookDialog.close();finishReadFromCard(event.currentTarget.dataset.dialogFinish);});
   document.querySelectorAll("#book-dialog-content [data-edit-read]").forEach((el)=>el.addEventListener("click",()=>{bookDialog.close();openEditRead(el.dataset.editRead);}));
   document.querySelectorAll("#book-dialog-content [data-delete-read]").forEach((el)=>el.addEventListener("click",()=>deleteRead(el.dataset.deleteRead,book.id)));
@@ -334,15 +445,18 @@ function openStartRead(book) {
 function openProgress(readId) {
   const read=state.data.reads.find((item)=>item.id===readId), book=bookById(read.book_id);
   const audioRuntime=read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds;
-  const audio=read.format==="audiobook"&&audioRuntime?audioBreakdown(audioRuntime,read.progress_percent||0):"";
-  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)}</p><h1>Update Progress</h1><p>${esc(book.title)}</p><form id="progress-form"><div class="form-grid">${read.format!=="audiobook"?field("Current page","page",read.progress_page,"number"):""}${read.format!=="print"?field("Percent complete","percent",read.progress_percent,"number"):""}${read.format==="audiobook"?field("Listening speed","listening_speed",read.listening_speed||1,"number"):""}</div>${audio}<div class="form-actions"><button type="button" class="button danger" id="mark-dnf">DNF This Read</button><button type="button" class="button" id="mark-finished">Finish Read</button><button class="button primary">Save Progress</button></div></form>`);
+  const audioFields=read.format==="audiobook"?`${field("Percent complete","percent",read.progress_percent??0,"number")}${audioRuntime?field("Content position (h:mm)","content_position",formatAudioPosition(audioRuntime*Number(read.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",read.listening_speed||1,"number")}`:"";
+  const standardFields=read.format!=="audiobook"?`${field("Current page","page",read.progress_page,"number")}${read.format!=="print"?field("Percent complete","percent",read.progress_percent,"number"):""}`:"";
+  const audio=read.format==="audiobook"&&audioRuntime?`<div id="audio-progress-breakdown">${audioBreakdown(audioRuntime,read.progress_percent||0,read.listening_speed||1)}</div>`:"";
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)}</p><h1>Update Progress</h1><p>${esc(book.title)}</p><form id="progress-form"><div class="form-grid">${audioFields||standardFields}</div>${audio}<div class="form-actions"><button type="button" class="button danger" id="mark-dnf">DNF This Read</button><button type="button" class="button" id="mark-finished">Finish Read</button><button class="button primary">Save Progress</button></div></form>`);
   const form=document.querySelector("#progress-form");
+  if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,Number(audioRuntime));
   form.addEventListener("submit",async(event)=>{event.preventDefault();try{await api(`/api/reads/${read.id}/progress`,{method:"PUT",body:JSON.stringify(Object.fromEntries(new FormData(form)))});formDialog.close();await refresh();toast("Progress updated");}catch(error){toast(error.message);}});
   document.querySelector("#mark-finished").addEventListener("click",()=>{if(confirm(`Finish ${readLabel(read)} today?`))completeRead(read,"finish");});
   document.querySelector("#mark-dnf").addEventListener("click",()=>{if(confirm(`Mark only ${readLabel(read)} as DNF? The underlying book and earlier reads will be kept.`))completeRead(read,"dnf");});
 }
 
-function audioBreakdown(runtime,percent) { const elapsed=Math.round(runtime*percent/100);return `<p class="panel" style="margin-top:14px"><strong>${Math.round(percent)}% complete</strong><br>${fmtDuration(elapsed)} content elapsed · ${fmtDuration(runtime-elapsed)} remaining</p>`; }
+function audioBreakdown(runtime,percent,speed=1) { const safePercent=Math.min(100,Math.max(0,Number(percent||0)));const elapsed=Math.round(runtime*safePercent/100);const remaining=Math.max(0,runtime-elapsed);return `<p class="panel audio-math" style="margin-top:14px"><strong>${safePercent.toFixed(1).replace(/\.0$/,"")}% complete · ${formatAudioPosition(elapsed)} position</strong><br>${fmtDuration(elapsed)} content elapsed · ${fmtDuration(remaining)} content remaining<br><span class="subtle">At ${Number(speed||1)}×: about ${fmtDuration(remaining/Number(speed||1))} actual listening remaining</span></p>`; }
 async function completeRead(read,action){try{if(state.activeTimer?.read_id===read.id)await api(`/api/sessions/${state.activeTimer.id}/stop`,{method:"POST",body:JSON.stringify({ended_at:new Date().toISOString()})});await api(`/api/reads/${read.id}/${action}`,{method:"POST",body:JSON.stringify({local_date:state.data.today,finish_date:state.data.today})});formDialog.close();await refresh();toast(action==="finish"?"Read-through finished":"This read-through was marked DNF; the book remains available");}catch(error){toast(error.message);}}
 
 async function finishReadFromCard(readId){const read=state.data.reads.find((item)=>item.id===readId);if(!read)return;if(!confirm(`Finish ${readLabel(read)} today?`))return;await completeRead(read,"finish");}
@@ -350,17 +464,18 @@ async function finishReadFromCard(readId){const read=state.data.reads.find((item
 function openEditRead(readId) {
   const read=state.data.reads.find((item)=>item.id===readId), book=read&&bookById(read.book_id);
   if(!read||!book)return;
-  const audioRuntime=Number(read.audiobook_runtime_seconds_snapshot||0);
+  const audioRuntime=Number(read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds??0);
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)} · ${esc(book.title)}</p><h1>Edit Read-through</h1><p class="subtle">Changes here affect only this reading record. Book title, author, and series remain under Edit Book.</p><form id="edit-read-form"><div class="form-grid">
     ${field("Start date","start_date",read.start_date,"date",true)}${field("Finish date","finish_date",read.finish_date,"date")}
     <div class="field"><label for="read-state">Status</label><select id="read-state" name="state"><option value="active" ${read.state==="active"?"selected":""}>Reading</option><option value="finished" ${read.state==="finished"?"selected":""}>Finished</option><option value="dnf" ${read.state==="dnf"?"selected":""}>DNF This Read</option></select></div>
     <div class="field"><label for="edit-read-format">Format</label><select id="edit-read-format" name="format"><option value="print" ${read.format==="print"?"selected":""}>Physical</option><option value="ebook" ${read.format==="ebook"?"selected":""}>Ebook</option><option value="audiobook" ${read.format==="audiobook"?"selected":""}>Audiobook</option><option value="other" ${read.format==="other"?"selected":""}>Other</option></select></div>
-    ${field("Current page","progress_page",read.progress_page,"number")}${field("Current percent","progress_percent",read.progress_percent,"number")}
+    ${field("Current page","progress_page",read.progress_page,"number")}${field("Current percent","progress_percent",read.progress_percent,"number")}${read.format==="audiobook"&&audioRuntime?field("Content position (h:mm)","edit_content_position",formatAudioPosition(audioRuntime*Number(read.progress_percent||0)/100)):""}
     ${field("Listening speed","listening_speed",read.listening_speed||1,"number")}${field("Edition page-count snapshot","page_count_snapshot",read.page_count_snapshot,"number")}
     ${field("Audiobook snapshot hours","snapshot_hours",Math.floor(audioRuntime/3600),"number")}${field("Audiobook snapshot minutes","snapshot_minutes",Math.round(audioRuntime%3600/60),"number")}
     <div class="field span-2"><label for="edit-read-notes">Read-through notes</label><textarea id="edit-read-notes" name="notes">${esc(read.notes||"")}</textarea></div>
   </div><p class="subtle">Changing Finished or DNF back to Reading repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
   const form=document.querySelector("#edit-read-form");
+  if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,audioRuntime,{percentName:"progress_percent",positionName:"edit_content_position",breakdownId:"unused-audio-breakdown"});
   form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.audiobook_runtime_seconds_snapshot=runtimeFromFields(data.snapshot_hours,data.snapshot_minutes);delete data.snapshot_hours;delete data.snapshot_minutes;try{await api(`/api/reads/${read.id}`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast("Read-through updated");}catch(error){toast(error.message);}});
   document.querySelector("#delete-read-from-edit").addEventListener("click",()=>deleteRead(read.id,book.id));
 }
@@ -376,7 +491,21 @@ async function saveAnnualGoal(event){event.preventDefault();const data=Object.fr
 function saveToken(event){event.preventDefault();localStorage.setItem("opalShelfAccessToken",new FormData(event.currentTarget).get("token"));toast("Access token saved on this device");refresh().catch(showFatal);}
 
 async function loadPendingCheckins(){try{state.pendingCheckins=await api(`/api/checkins/pending?date=${dateKey()}`);if(state.pendingCheckins.length)showNextCheckin();}catch(error){console.warn(error);}}
-function showNextCheckin(){const item=state.pendingCheckins[0];if(!item)return;let fields=(item.format==="print"||item.format==="other")?field("Where did you finish? Page","page",item.progress_page,"number"):item.format==="ebook"?`${field("Page (optional)","page",item.progress_page,"number")}${field("Progress percent (optional)","percent",item.progress_percent,"number")}`:`${field("Current progress","percent",item.progress_percent,"number")}${field("Listening speed","listening_speed",item.listening_speed||1,"number")}`;document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">Yesterday’s Reading</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;checkinDialog.showModal();document.querySelector("#checkin-later").addEventListener("click",()=>checkinDialog.close());document.querySelector("#checkin-form").addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));Object.assign(data,{read_id:item.read_id,session_date:item.session_date});try{await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});state.pendingCheckins.shift();checkinDialog.close();await refresh();if(state.pendingCheckins.length)showNextCheckin();toast("Yesterday’s progress saved");}catch(error){toast(error.message);}});}
+function showNextCheckin(){
+  const item=state.pendingCheckins[0];
+  if(!item)return;
+  const runtime=Number(item.audiobook_runtime_seconds_snapshot??item.audiobook_runtime_seconds??0);
+  let fields;
+  if(item.format==="print"||item.format==="other")fields=field("Where did you finish? Page","page",item.progress_page,"number");
+  else if(item.format==="ebook")fields=`${field("Page (optional)","page",item.progress_page,"number")}${field("Progress percent (optional)","percent",item.progress_percent,"number")}`;
+  else fields=`${field("Current progress","percent",item.progress_percent??0,"number")}${runtime?field("Content position (h:mm)","content_position",formatAudioPosition(runtime*Number(item.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",item.listening_speed||1,"number")}`;
+  document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">Yesterday’s Reading</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;
+  checkinDialog.showModal();
+  const form=document.querySelector("#checkin-form");
+  if(item.format==="audiobook"&&runtime)bindAudioProgress(form,runtime,{breakdownId:"unused-checkin-breakdown"});
+  document.querySelector("#checkin-later").addEventListener("click",()=>checkinDialog.close());
+  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));Object.assign(data,{read_id:item.read_id,session_date:item.session_date});try{await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});state.pendingCheckins.shift();checkinDialog.close();await refresh();if(state.pendingCheckins.length)showNextCheckin();toast("Yesterday’s progress saved");}catch(error){toast(error.message);}});
+}
 
 function formDialogContent(html){document.querySelector("#form-dialog-content").innerHTML=html;formDialog.showModal();document.querySelectorAll("#form-dialog-content [data-close]").forEach((el)=>el.addEventListener("click",()=>formDialog.close()));}
 function showFatal(error){app.innerHTML=`<div class="error-banner"><h2>Opal Shelf couldn’t open</h2><p>${esc(error.message)}</p><p>Check the Worker URL in <code>config.js</code> and your access token in Settings.</p><button class="button" id="retry">Try Again</button></div>`;document.querySelector("#retry").addEventListener("click",()=>refresh({checkins:true}).catch(showFatal));}

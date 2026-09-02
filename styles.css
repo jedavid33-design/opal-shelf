@@ -21,8 +21,8 @@
 }
 
 * { box-sizing: border-box; }
-html { min-height: 100%; background: var(--paper); }
-body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 10% 0%, rgba(255,255,255,.9), transparent 33rem), var(--paper); }
+html { min-height: 100%; overflow-x: hidden; background: var(--paper); }
+body { margin: 0; min-height: 100vh; overflow-x: hidden; background: radial-gradient(circle at 10% 0%, rgba(255,255,255,.9), transparent 33rem), var(--paper); }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(196,130,114,.48); outline-offset: 2px; }
@@ -56,10 +56,11 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
 
 .current-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(285px, 355px); gap: 16px; overflow-x: auto; padding: 4px 4px 16px; scroll-snap-type: x mandatory; scrollbar-color: var(--wood-light) transparent; }
 .read-card { scroll-snap-align: start; min-height: 280px; padding: 18px; border: 1px solid rgba(101,71,53,.17); border-radius: 20px; background: var(--card); box-shadow: var(--shadow); display: grid; grid-template-columns: 88px 1fr; gap: 16px; position: relative; overflow: hidden; }
+.read-card > div { min-width: 0; }
 .read-card::after { content: ""; position: absolute; height: 6px; left: 0; right: 0; bottom: 0; background: linear-gradient(90deg, var(--wood-dark), var(--wood-light), var(--wood-dark)); }
 .cover { width: 88px; aspect-ratio: 2/3; object-fit: cover; border-radius: 4px 8px 8px 4px; background: #d8c5b2; box-shadow: 5px 7px 13px rgba(50,34,24,.25); }
 .cover.placeholder { display: grid; place-items: center; padding: 10px; text-align: center; color: #fff; background: linear-gradient(140deg,#76503d,#a66f58); font: 600 .85rem/1.2 "Lora"; }
-.read-card h3 { font-size: 1.12rem; margin: 2px 0 4px; line-height: 1.25; }
+.read-card h3 { font-size: 1.12rem; margin: 2px 0 4px; line-height: 1.25; overflow-wrap: anywhere; }
 .read-card .author { color: var(--muted); font-size: .9rem; }
 .format-chip, .status-chip { display: inline-flex; align-items: center; min-height: 26px; padding: 3px 8px; border-radius: 999px; background: var(--paper-deep); color: #5e4b3f; font-size: .75rem; font-weight: 800; text-transform: capitalize; }
 .progress-bar { height: 9px; margin: 12px 0 7px; overflow: hidden; border-radius: 999px; background: #e9dfd4; }
@@ -71,6 +72,22 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
 .stat { min-height: 110px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,253,249,.76); }
 .stat .value { display: block; margin: 3px 0; font: 700 clamp(1.35rem,3vw,1.8rem) "Lora"; }
 .stat .label { color: var(--muted); font-size: .82rem; }
+
+.daily-history { display: grid; gap: 16px; }
+.day-card { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--card); box-shadow: 0 7px 24px rgba(60,40,26,.07); }
+.day-card > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--line); background: rgba(236,226,213,.42); }
+.day-card h2 { margin: 0; font-size: 1.25rem; }
+.day-total { flex: 0 0 auto; text-align: right; }
+.day-total strong { display: block; font: 700 1.45rem "Lora"; }
+.day-total span { color: var(--muted); font-size: .78rem; }
+.day-contributions { display: grid; }
+.day-book { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 20px; }
+.day-book + .day-book { border-top: 1px solid rgba(222,210,195,.72); }
+.day-book > div { min-width: 0; }
+.day-book strong, .day-book span, .day-book small { display: block; }
+.day-book strong { overflow-wrap: anywhere; }
+.day-book span, .day-book small { margin-top: 3px; color: var(--muted); font-size: .82rem; }
+.day-book b { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 
 .shelf-unit { margin: 22px 0 42px; padding: 18px 16px 0; border-radius: 10px 10px 2px 2px; background: linear-gradient(90deg,rgba(58,38,27,.06),transparent 8%,transparent 92%,rgba(58,38,27,.06)); }
 .shelf-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 15px; }
@@ -130,6 +147,12 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
   .modal.wide { width: min(900px,calc(100% - 32px)); }
 }
 @media (max-width: 760px) {
+  main { padding-inline: 12px; }
+  .page-head, .section-title { align-items: flex-start; flex-wrap: wrap; }
+  .current-strip { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: minmax(0,1fr); overflow-x: visible; padding-inline: 0; scroll-snap-type: none; }
+  .read-card { width: 100%; min-width: 0; grid-template-columns: 76px minmax(0,1fr); gap: 12px; padding: 14px; }
+  .read-card .cover { width: 76px; }
+  .read-actions .button { min-width: 0; padding-inline: 8px; white-space: normal; }
   .dashboard { grid-template-columns: 1fr 1fr; }
   .goal-grid { grid-template-columns: 1fr; }
   .app-header { min-height: 66px; }
@@ -144,10 +167,21 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
   .detail-head { grid-template-columns: 95px 1fr; gap: 15px; }
   .detail-head .cover { width: 95px; }
   .detail-head h1 { font-size: 1.5rem; }
-  .read-card { grid-template-columns: 76px 1fr; }
-  .read-card .cover { width: 76px; }
+  .modal { width: 100%; max-width: none; max-height: 100dvh; margin: auto 0 0; border-radius: 18px 18px 0 0; }
+  .modal-shell { max-height: calc(100dvh - env(safe-area-inset-top)); padding: 18px 14px calc(24px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
+  .field input, .field select, .field textarea { font-size: 16px; }
+  .form-actions .button { flex: 1 1 135px; }
+  .search-result { grid-template-columns: 36px minmax(0,1fr) auto; }
+  .search-result img { width: 36px; height: 54px; }
   .history-summary { display: block; }
   .history-actions { justify-content: flex-start; margin-top: 12px; }
+  .day-card > header { align-items: flex-start; padding: 15px; }
+  .day-book { align-items: flex-start; padding: 13px 15px; }
+}
+@media (max-width: 420px) {
+  .dashboard { grid-template-columns: 1fr; }
+  .day-card > header { display: block; }
+  .day-total { margin-top: 10px; text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }

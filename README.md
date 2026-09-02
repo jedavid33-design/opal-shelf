@@ -1,6 +1,6 @@
-# Opal Shelf v0.0.3 — GitHub Pages frontend
+# Opal Shelf v0.0.4 — GitHub Pages frontend
 
-This is the Opal Shelf v0.0.1 progressive web app.
+This is the flat GitHub Pages frontend package for Opal Shelf v0.0.4.
 
 ## Connect it to the Worker
 
@@ -24,19 +24,20 @@ If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of t
 
 The app can then be added to the iPhone or iPad home screen from Safari.
 
-## v0.0.3 polish update
+## v0.0.4 update order
 
-Replace the GitHub repository files with this ZIP's contents. No Worker update or D1 migration is required.
+1. Run `0003_session_listening_speed.sql` from the separate Worker ZIP against `opal-shelf-db` exactly once.
+2. Replace the deployed Worker with the flat `worker.js` from that ZIP and confirm `/health` reports `0.0.4`.
+3. Replace the GitHub repository files with this ZIP's contents.
+
+Do not rerun either earlier migration.
 
 This release:
 
-- accepts decimal listening speeds in 0.05× increments, including 1.7×
-- sums stored session seconds first and displays exact totals such as `4m 23s` or `1h 12m 8s`
+- adds newest-first daily progress history with exact session-second totals and book/read-through contributions
+- repairs Current Reads and forms for mobile screens
+- preserves the originating read-through/card when a timer starts and sorts Current Reads by recent activity
+- supports synchronized audiobook percentage and content-position entry
+- snapshots listening speed on each new audiobook timer session so later speed changes do not rewrite history
 
-## Previous v0.0.2 update order
-
-1. Run the included `0002_readthrough_management.sql` migration from the Worker ZIP against `opal-shelf-db`.
-2. Replace the Worker with the flat `worker.js` from the Worker ZIP.
-3. Replace the GitHub repository files with this ZIP's contents.
-
-This release adds read-through editing, deletion, recovery of accidental status changes, per-read notes, clearer read/reread labels, `Other` format support, and edition-length snapshots. It adds no ratings.
+Streak calculation is intentionally unchanged. No ratings were added.
