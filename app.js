@@ -126,8 +126,8 @@ function readCard(read) {
   if ((read.format === "print" || read.format === "ebook" || read.format === "other") && read.progress_page != null) progressLabel = `Page ${read.progress_page}${totalPages ? ` of ${totalPages}` : ""}`;
   if(read.format==="audiobook"&&read.audiobook_runtime_seconds_snapshot)progressLabel=`${formatAudioPosition(read.audiobook_runtime_seconds_snapshot*pct/100)} · ${Math.round(pct)}% complete`;
   return `<article class="read-card" data-read-card="${read.id}">
-    <button class="ghost" data-book="${book.id}" aria-label="Open ${esc(book.title)}">${cover(book)}</button>
-    <div>
+    <button class="cover-button" data-book="${book.id}" aria-label="Open ${esc(book.title)}">${cover(book)}</button>
+    <div class="read-info">
       <span class="format-chip">${esc(formatLabel(read.format))}</span>
       <h3>${esc(book.title)}</h3><p class="author">${esc(authors(book))}</p>
       <div class="progress-bar" aria-label="${Math.round(pct)} percent complete"><span style="width:${pct}%"></span></div>
@@ -262,7 +262,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.4</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.5</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -451,7 +451,7 @@ function openProgress(readId) {
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)}</p><h1>Update Progress</h1><p>${esc(book.title)}</p><form id="progress-form"><div class="form-grid">${audioFields||standardFields}</div>${audio}<div class="form-actions"><button type="button" class="button danger" id="mark-dnf">DNF This Read</button><button type="button" class="button" id="mark-finished">Finish Read</button><button class="button primary">Save Progress</button></div></form>`);
   const form=document.querySelector("#progress-form");
   if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,Number(audioRuntime));
-  form.addEventListener("submit",async(event)=>{event.preventDefault();try{await api(`/api/reads/${read.id}/progress`,{method:"PUT",body:JSON.stringify(Object.fromEntries(new FormData(form)))});formDialog.close();await refresh();toast("Progress updated");}catch(error){toast(error.message);}});
+  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.local_date=state.data.today;try{const result=await api(`/api/reads/${read.id}/progress`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast(result.inferred_duration_seconds?`Progress updated · ${fmtDuration(result.inferred_duration_seconds)} added today`:"Progress updated");}catch(error){toast(error.message);}});
   document.querySelector("#mark-finished").addEventListener("click",()=>{if(confirm(`Finish ${readLabel(read)} today?`))completeRead(read,"finish");});
   document.querySelector("#mark-dnf").addEventListener("click",()=>{if(confirm(`Mark only ${readLabel(read)} as DNF? The underlying book and earlier reads will be kept.`))completeRead(read,"dnf");});
 }

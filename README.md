@@ -1,6 +1,6 @@
-# Opal Shelf v0.0.4 — GitHub Pages frontend
+# Opal Shelf v0.0.5 — GitHub Pages frontend
 
-This is the flat GitHub Pages frontend package for Opal Shelf v0.0.4.
+This is the flat GitHub Pages frontend package for Opal Shelf v0.0.5.
 
 ## Connect it to the Worker
 
@@ -24,20 +24,18 @@ If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of t
 
 The app can then be added to the iPhone or iPad home screen from Safari.
 
-## v0.0.4 update order
+## v0.0.5 update order
 
-1. Run `0003_session_listening_speed.sql` from the separate Worker ZIP against `opal-shelf-db` exactly once.
-2. Replace the deployed Worker with the flat `worker.js` from that ZIP and confirm `/health` reports `0.0.4`.
-3. Replace the GitHub repository files with this ZIP's contents.
+1. Replace the deployed Worker with the flat `worker.js` from the separate Worker ZIP and confirm `/health` reports `0.0.5`.
+2. Replace the GitHub repository files with this ZIP's contents.
 
-Do not rerun either earlier migration.
+No database migration is required. Do not rerun any earlier migration, including `0003_session_listening_speed.sql`.
 
 This release:
 
-- adds newest-first daily progress history with exact session-second totals and book/read-through contributions
-- repairs Current Reads and forms for mobile screens
-- preserves the originating read-through/card when a timer starts and sorts Current Reads by recent activity
-- supports synchronized audiobook percentage and content-position entry
-- snapshots listening speed on each new audiobook timer session so later speed changes do not rewrite history
+- gives mobile Current Reads a fixed 116px cover column and a separate flexible information column
+- persists forward audiobook progress as actual listening time using the interval's listening speed
+- reuses existing timer sessions instead of inferring duplicate time when timer activity covers the interval
+- keeps each inferred interval's speed frozen on its session record
 
 Streak calculation is intentionally unchanged. No ratings were added.
