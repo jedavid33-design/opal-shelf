@@ -150,7 +150,8 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
   .modal.wide { width: min(900px,calc(100% - 32px)); }
 }
 @media (max-width: 760px) {
-  main { padding-inline: 12px; }
+  main { padding-right: 12px; padding-bottom: calc(160px + env(safe-area-inset-bottom)); padding-left: 12px; }
+  .read-card { scroll-margin-bottom: calc(104px + env(safe-area-inset-bottom)); }
   .page-head, .section-title { align-items: flex-start; flex-wrap: wrap; }
   .current-strip { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: minmax(0,1fr); overflow-x: visible; padding-inline: 0; scroll-snap-type: none; }
   .read-card { width: 100%; min-width: 0; grid-template-columns: 116px minmax(0,1fr); gap: 16px; padding: 14px; }

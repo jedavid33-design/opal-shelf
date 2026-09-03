@@ -1,6 +1,6 @@
-# Opal Shelf v0.0.5 — GitHub Pages frontend
+# Opal Shelf v0.0.6 — GitHub Pages frontend
 
-This is the flat GitHub Pages frontend package for Opal Shelf v0.0.5.
+This is the flat GitHub Pages frontend package for Opal Shelf v0.0.6.
 
 ## Connect it to the Worker
 
@@ -24,18 +24,17 @@ If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of t
 
 The app can then be added to the iPhone or iPad home screen from Safari.
 
-## v0.0.5 update order
+## v0.0.6 update
 
-1. Replace the deployed Worker with the flat `worker.js` from the separate Worker ZIP and confirm `/health` reports `0.0.5`.
-2. Replace the GitHub repository files with this ZIP's contents.
+Replace the GitHub repository files with this ZIP's contents.
 
-No database migration is required. Do not rerun any earlier migration, including `0003_session_listening_speed.sql`.
+This is a frontend-only patch. Do not replace the Worker and do not rerun any database migration.
 
 This release:
 
-- gives mobile Current Reads a fixed 116px cover column and a separate flexible information column
-- persists forward audiobook progress as actual listening time using the interval's listening speed
-- reuses existing timer sessions instead of inferring duplicate time when timer activity covers the interval
-- keeps each inferred interval's speed frozen on its session record
+- adds mobile bottom clearance so every Current Reads card and action can scroll fully above the fixed navigation
+- derives print/ebook progress from current page divided by the read-through page-count snapshot
+- displays page progress as, for example, `Page 177 of 335 · 53% complete`
+- uses the same derived percentage for the progress bar without rewriting historical records
 
 Streak calculation is intentionally unchanged. No ratings were added.

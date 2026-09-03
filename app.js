@@ -62,9 +62,9 @@ function recentActivityTime(read) {
 }
 function progress(read, book) {
   if (!read) return 0;
-  if (read.progress_percent != null) return Math.min(100,Math.max(0,Number(read.progress_percent)));
   const totalPages = read.page_count_snapshot ?? book.page_count;
-  if (read.progress_page != null && totalPages) return Math.min(100,Math.max(0,Number(read.progress_page)/Number(totalPages)*100));
+  if (["print","ebook","other"].includes(read.format) && read.progress_page != null && totalPages) return Math.min(100,Math.max(0,Number(read.progress_page)/Number(totalPages)*100));
+  if (read.progress_percent != null) return Math.min(100,Math.max(0,Number(read.progress_percent)));
   return read.state === "finished" ? 100 : 0;
 }
 
@@ -123,7 +123,7 @@ function readCard(read) {
   const blocked = state.activeTimer && !isRunning;
   const totalPages = read.page_count_snapshot ?? book.page_count;
   let progressLabel = `${Math.round(pct)}% complete`;
-  if ((read.format === "print" || read.format === "ebook" || read.format === "other") && read.progress_page != null) progressLabel = `Page ${read.progress_page}${totalPages ? ` of ${totalPages}` : ""}`;
+  if ((read.format === "print" || read.format === "ebook" || read.format === "other") && read.progress_page != null) progressLabel = `Page ${read.progress_page}${totalPages ? ` of ${totalPages} · ${Math.round(pct)}% complete` : ""}`;
   if(read.format==="audiobook"&&read.audiobook_runtime_seconds_snapshot)progressLabel=`${formatAudioPosition(read.audiobook_runtime_seconds_snapshot*pct/100)} · ${Math.round(pct)}% complete`;
   return `<article class="read-card" data-read-card="${read.id}">
     <button class="cover-button" data-book="${book.id}" aria-label="Open ${esc(book.title)}">${cover(book)}</button>
@@ -262,7 +262,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.5</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.6</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -445,8 +445,9 @@ function openStartRead(book) {
 function openProgress(readId) {
   const read=state.data.reads.find((item)=>item.id===readId), book=bookById(read.book_id);
   const audioRuntime=read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds;
+  const pageTotal=read.page_count_snapshot??book.page_count;
   const audioFields=read.format==="audiobook"?`${field("Percent complete","percent",read.progress_percent??0,"number")}${audioRuntime?field("Content position (h:mm)","content_position",formatAudioPosition(audioRuntime*Number(read.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",read.listening_speed||1,"number")}`:"";
-  const standardFields=read.format!=="audiobook"?`${field("Current page","page",read.progress_page,"number")}${read.format!=="print"?field("Percent complete","percent",read.progress_percent,"number"):""}`:"";
+  const standardFields=read.format!=="audiobook"?`${field("Current page","page",read.progress_page,"number")}${read.format!=="print"&&!pageTotal?field("Percent complete","percent",read.progress_percent,"number"):""}`:"";
   const audio=read.format==="audiobook"&&audioRuntime?`<div id="audio-progress-breakdown">${audioBreakdown(audioRuntime,read.progress_percent||0,read.listening_speed||1)}</div>`:"";
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)}</p><h1>Update Progress</h1><p>${esc(book.title)}</p><form id="progress-form"><div class="form-grid">${audioFields||standardFields}</div>${audio}<div class="form-actions"><button type="button" class="button danger" id="mark-dnf">DNF This Read</button><button type="button" class="button" id="mark-finished">Finish Read</button><button class="button primary">Save Progress</button></div></form>`);
   const form=document.querySelector("#progress-form");
