@@ -1,6 +1,6 @@
-# Opal Shelf v0.0.6 — GitHub Pages frontend
+# Opal Shelf v0.0.7 — GitHub Pages frontend
 
-This is the flat GitHub Pages frontend package for Opal Shelf v0.0.6.
+This is the flat GitHub Pages frontend package for Opal Shelf v0.0.7.
 
 ## Connect it to the Worker
 
@@ -24,7 +24,7 @@ If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of t
 
 The app can then be added to the iPhone or iPad home screen from Safari.
 
-## v0.0.6 update
+## v0.0.7 update
 
 Replace the GitHub repository files with this ZIP's contents.
 

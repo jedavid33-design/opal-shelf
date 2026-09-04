@@ -262,7 +262,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.6</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.7</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -423,12 +423,29 @@ function openBook(bookId) {
   document.querySelectorAll("[data-shelf-membership]").forEach((input)=>input.addEventListener("change",()=>toggleMembership(input.dataset.shelfMembership,book.id,input.checked)));
 }
 
+function sessionTimeLabel(session) {
+  const start=new Date(session.started_at);
+  const end=session.ended_at?new Date(session.ended_at):null;
+  const opts={hour:"numeric",minute:"2-digit"};
+  return `${start.toLocaleTimeString([],opts)}${end?`–${end.toLocaleTimeString([],opts)}`:""}`;
+}
+function sessionRows(read) {
+  const sessions=sessionsForRead(read.id).sort((a,b)=>new Date(b.started_at)-new Date(a.started_at));
+  if(!sessions.length)return `<p class="subtle session-empty">No completed timer sessions for this read-through.</p>`;
+  const groups=new Map();
+  sessions.forEach(session=>{const key=session.local_date||dateKey(new Date(session.started_at));if(!groups.has(key))groups.set(key,[]);groups.get(key).push(session);});
+  return [...groups.entries()].map(([day,items])=>`<div class="session-day"><strong>${fmtDate(day)}</strong>${items.map(session=>`<div class="session-row"><div><span>${esc(sessionTimeLabel(session))}</span><small>${fmtDuration(session.duration_seconds)}${session.listening_speed!=null?` • ${Number(session.listening_speed)}×`:""}</small></div><button type="button" class="session-menu" data-session-menu="${session.id}" aria-label="Session options" title="Session options">•••</button></div>`).join("")}</div>`).join("");
+}
+function sessionSection(read,{open=false}={}) {
+  const count=sessionsForRead(read.id).length;
+  return `<details class="session-details" ${open?"open":""}><summary>Sessions <span class="subtle">${count}</span></summary><div class="session-list">${sessionRows(read)}</div></details>`;
+}
 function readHistoryItem(read) {
   const timed=fmtDuration(sessionsForRead(read.id).reduce((sum,s)=>sum+Number(s.duration_seconds||0),0));
   const snapshot=read.format==="audiobook"&&read.audiobook_runtime_seconds_snapshot
     ? `${fmtDuration(read.audiobook_runtime_seconds_snapshot)} audiobook snapshot`
     : read.page_count_snapshot ? `${read.page_count_snapshot} page snapshot` : "No length snapshot";
-  return `<article class="history-item"><div class="history-summary"><div><strong>${readLabel(read)} • ${readDateRange(read)} • ${esc(formatLabel(read.format))}</strong><br><span class="status-chip">${read.state==="active"?"Reading":esc(read.state)}</span> <span class="subtle">${timed} timed • ${snapshot}</span>${read.notes?`<p class="read-notes">${esc(read.notes)}</p>`:""}</div><div class="history-actions"><button class="button small" data-edit-read="${read.id}">Edit Read-through</button><button class="button small danger" data-delete-read="${read.id}">Delete</button></div></div></article>`;
+  return `<article class="history-item"><div class="history-summary"><div><strong>${readLabel(read)} • ${readDateRange(read)} • ${esc(formatLabel(read.format))}</strong><br><span class="status-chip">${read.state==="active"?"Reading":esc(read.state)}</span> <span class="subtle">${timed} timed • ${snapshot}</span>${read.notes?`<p class="read-notes">${esc(read.notes)}</p>`:""}</div><div class="history-actions"><button class="button small" data-edit-read="${read.id}">Edit Read-through</button><button class="button small danger" data-delete-read="${read.id}">Delete</button></div></div>${sessionSection(read)}</article>`;
 }
 
 function openEditBook(book) {
@@ -474,7 +491,7 @@ function openEditRead(readId) {
     ${field("Listening speed","listening_speed",read.listening_speed||1,"number")}${field("Edition page-count snapshot","page_count_snapshot",read.page_count_snapshot,"number")}
     ${field("Audiobook snapshot hours","snapshot_hours",Math.floor(audioRuntime/3600),"number")}${field("Audiobook snapshot minutes","snapshot_minutes",Math.round(audioRuntime%3600/60),"number")}
     <div class="field span-2"><label for="edit-read-notes">Read-through notes</label><textarea id="edit-read-notes" name="notes">${esc(read.notes||"")}</textarea></div>
-  </div><p class="subtle">Changing Finished or DNF back to Reading repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
+  </div>${sessionSection(read,{open:true})}<p class="subtle">Changing Finished or DNF back to Reading repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
   const form=document.querySelector("#edit-read-form");
   if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,audioRuntime,{percentName:"progress_percent",positionName:"edit_content_position",breakdownId:"unused-audio-breakdown"});
   form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.audiobook_runtime_seconds_snapshot=runtimeFromFields(data.snapshot_hours,data.snapshot_minutes);delete data.snapshot_hours;delete data.snapshot_minutes;try{await api(`/api/reads/${read.id}`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast("Read-through updated");}catch(error){toast(error.message);}});
@@ -518,3 +535,25 @@ document.addEventListener("visibilitychange",()=>{if(document.visibilityState===
 window.addEventListener("focus",()=>refresh({checkins:true}).catch(()=>{}));
 if("serviceWorker" in navigator) window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
 refresh({checkins:true}).catch(showFatal);
+
+async function sessionOptions(sessionId) {
+  const session=state.data.sessions.find(item=>item.id===sessionId);
+  if(!session||!session.ended_at)return;
+  const currentRead=state.data.reads.find(read=>read.id===session.read_id);
+  const choice=prompt(`Session ${fmtDuration(session.duration_seconds)} on ${fmtDate(session.local_date)}\n\nType M to move it to another read-through, or D to delete it.`);
+  if(!choice)return;
+  if(choice.trim().toLowerCase()==="d"){
+    if(!confirm(`Delete this ${fmtDuration(session.duration_seconds)} session? This will reduce that day's reading total.`))return;
+    try{const editWasOpen=formDialog.open,historyWasOpen=bookDialog.open;const historyBookId=currentRead?.book_id;if(editWasOpen)formDialog.close();if(historyWasOpen)bookDialog.close();await api(`/api/sessions/${session.id}`,{method:"DELETE"});await refresh();if(editWasOpen&&currentRead)openEditRead(currentRead.id);else if(historyWasOpen&&historyBookId)openBook(historyBookId);toast("Session deleted");}catch(error){toast(error.message);}
+    return;
+  }
+  if(choice.trim().toLowerCase()!=="m")return;
+  const destinations=state.data.reads.filter(read=>read.id!==session.read_id).map((read,index)=>{const book=bookById(read.book_id);return {read,index:index+1,label:`${index+1}. ${book?.title||"Unknown book"} · ${readLabel(read)} · ${readDateRange(read)}`};});
+  if(!destinations.length){toast("There is no other read-through to move this session to");return;}
+  const picked=prompt(`Move session to which read-through?\n\n${destinations.map(item=>item.label).join("\n")}\n\nEnter the number:`);
+  const destination=destinations.find(item=>String(item.index)===String(picked||"").trim());
+  if(!destination){if(picked)toast("That read-through number wasn't found");return;}
+  try{const editWasOpen=formDialog.open,historyWasOpen=bookDialog.open;const historyBookId=currentRead?.book_id;if(editWasOpen)formDialog.close();if(historyWasOpen)bookDialog.close();await api(`/api/sessions/${session.id}`,{method:"PUT",body:JSON.stringify({read_id:destination.read.id})});await refresh();if(editWasOpen&&currentRead)openEditRead(currentRead.id);else if(historyWasOpen&&historyBookId)openBook(historyBookId);toast("Session moved");}catch(error){toast(error.message);}
+}
+
+document.addEventListener("click",(event)=>{const button=event.target.closest("[data-session-menu]");if(button)sessionOptions(button.dataset.sessionMenu);});
