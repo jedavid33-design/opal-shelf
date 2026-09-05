@@ -205,3 +205,8 @@ main { width: min(1180px, 100%); margin: 0 auto; padding: 28px clamp(16px,4vw,42
 .session-menu { flex: 0 0 auto; width: 34px; height: 30px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-weight: 800; letter-spacing: 1px; cursor: pointer; }
 .session-menu:hover, .session-menu:focus-visible { background: rgba(112,91,151,.10); color: var(--ink); outline: none; }
 .session-empty { margin: 0; font-size: .88rem; }
+
+/* v0.0.8: quiet session editing + cover repair */
+.cover-repair { align-content: end; }
+.cover-repair .button { justify-self: start; }
+.cover-remove { align-self: end; color: var(--muted); font-size: .88rem; }

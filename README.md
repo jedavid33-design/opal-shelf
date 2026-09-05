@@ -1,40 +1,22 @@
-# Opal Shelf v0.0.7 — GitHub Pages frontend
+# Opal Shelf v0.0.8 — GitHub Pages frontend
 
-This is the flat GitHub Pages frontend package for Opal Shelf v0.0.7.
+Flat GitHub Pages frontend package for Opal Shelf v0.0.8.
 
-## Connect it to the Worker
+## Install
 
-The included `config.js` already points to the live `opal-shelf` Worker. If the Worker URL ever changes, replace `apiBaseUrl` with the new URL, without a trailing slash:
+1. Deploy the v0.0.8 Worker.
+2. Confirm `/health` reports `0.0.8`.
+3. Replace the GitHub repository root files with this ZIP.
 
-```js
-window.OPAL_SHELF_CONFIG = {
-  apiBaseUrl: "https://opal-shelf.4d8v7jw78c.workers.dev",
-  accessToken: ""
-};
-```
+No D1 migration is required.
 
-If you enabled `OPAL_SHELF_ACCESS_TOKEN` on the Worker, leave the token out of this public repository. Open the app and save it privately on your device under **Settings → Access token**.
+## v0.0.8
 
-## Publish on GitHub Pages
-
-1. Upload every file from this ZIP to the root of a new GitHub repository.
-2. Open **Settings → Pages**.
-3. Choose **Deploy from a branch**.
-4. Select the `main` branch and `/ (root)` folder.
-
-The app can then be added to the iPhone or iPad home screen from Safari.
-
-## v0.0.7 update
-
-Replace the GitHub repository files with this ZIP's contents.
-
-This is a frontend-only patch. Do not replace the Worker and do not rerun any database migration.
-
-This release:
-
-- adds mobile bottom clearance so every Current Reads card and action can scroll fully above the fixed navigation
-- derives print/ebook progress from current page divided by the read-through page-count snapshot
-- displays page progress as, for example, `Page 177 of 335 · 53% complete`
-- uses the same derived percentage for the progress bar without rewriting historical records
-
-Streak calculation is intentionally unchanged. No ratings were added.
+- Adds **Edit session** to the quiet `•••` repair menu under Reading History / Edit Read-through.
+- Session edits can correct date, start/end time, duration, and audiobook listening speed.
+- Start/end edits recalculate duration. Direct duration edits preserve start time and shift the end time.
+- Keeps Move session and Delete session.
+- Hardens book-cover persistence so routine Edit Book saves do not silently clear an existing cover.
+- Adds a small **Find cover** repair action in Edit Book using the existing Open Library search.
+- Intentional cover removal requires the explicit Remove current cover checkbox.
+- No ratings.
