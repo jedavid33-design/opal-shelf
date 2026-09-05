@@ -143,6 +143,49 @@ function readCard(read) {
   </article>`;
 }
 
+
+function dailyPagePace(day) {
+  // Daily pages/hour uses only page-based reading. Audiobook time is deliberately excluded.
+  const rows = day?.reads || day?.items || day?.books || [];
+  let pages = 0;
+  let seconds = 0;
+
+  for (const row of rows) {
+    const read = state.data.reads.find(r => r.id === (row.read_id || row.readId));
+    const book = bookById(row.book_id || row.bookId || read?.book_id);
+    const format = String(read?.format || book?.format_metadata || book?.format || "").toLowerCase();
+    if (format === "audiobook") continue;
+
+    const startPage = Number(row.start_page ?? row.page_start ?? row.startPage);
+    const endPage = Number(row.end_page ?? row.page_end ?? row.endPage);
+    if (Number.isFinite(startPage) && Number.isFinite(endPage) && endPage > startPage) {
+      pages += endPage - startPage;
+      seconds += Number(row.duration_seconds ?? row.durationSeconds ?? row.seconds ?? 0) || 0;
+    }
+  }
+
+  // Fallback to the underlying session/progress data when the day summary rows do not expose duration.
+  if (pages > 0 && seconds <= 0 && day?.local_date) {
+    const eligibleReadIds = new Set(
+      state.data.reads
+        .filter(read => String(read.format || "").toLowerCase() !== "audiobook")
+        .map(read => read.id)
+    );
+    seconds = state.data.sessions
+      .filter(session =>
+        session.local_date === day.local_date &&
+        session.ended_at &&
+        eligibleReadIds.has(session.read_id)
+      )
+      .reduce((sum, session) => sum + (Number(session.duration_seconds) || 0), 0);
+  }
+
+  if (pages <= 0 || seconds <= 0) return "";
+  const pace = pages / (seconds / 3600);
+  return `${Math.round(pace)} pg/hr`;
+}
+
+
 function dailyHistoryRows() {
   const days=new Map();
   const ensureDay=(key)=>{
@@ -205,7 +248,7 @@ function dailyHistoryView() {
     ${rows.length?`<div class="daily-history">${rows.map((day)=>{
       const relative=day.date===state.data.today?"Today":day.date===addDateKey(state.data.today,-1)?"Yesterday":new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined,{weekday:"long"});
       const contributions=[...day.contributions.values()].sort((a,b)=>b.seconds-a.seconds);
-      return `<section class="day-card"><header><div><p class="eyebrow">${esc(relative)}</p><h2>${esc(fmtDate(day.date))}</h2></div><div class="day-total"><strong>${fmtDuration(day.totalSeconds)}</strong><span>${esc(dayGoalLine(day))}</span></div></header><div class="day-contributions">${contributions.map((item)=>{
+      return `<section class="day-card"><header><div><p class="eyebrow">${esc(relative)}</p><h2>${esc(fmtDate(day.date))}</h2></div><div class="day-total"><strong>${fmtDuration(day.totalSeconds)}${dailyPagePace(day) ? ` · ${dailyPagePace(day)}` : ""}</strong><span>${esc(dayGoalLine(day))}</span></div></header><div class="day-contributions">${contributions.map((item)=>{
         const read=state.data.reads.find((candidate)=>candidate.id===item.readId),book=bookById(item.bookId);
         const speeds=[...item.speeds].sort((a,b)=>a-b);
         const progressLine=progressChangeLine(item,read,book);
