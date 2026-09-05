@@ -484,15 +484,69 @@ async function handleApi(request, env, url) {
     const input = await parseJson(request);
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", input.read_id);
     if (!read) throw new HttpError(404, "Read-through not found");
+
+    const sessionDate = String(input.session_date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) throw new HttpError(400, "A valid session date is required");
+
+    // A rollover reconciliation belongs to the day whose sessions are being reconciled.
+    // Derive that day's starting point from the most recent earlier daily check-in,
+    // falling back to the read-through's original starting progress.
+    const prior = await first(db, `SELECT new_page,new_percent
+      FROM daily_checkins
+      WHERE read_id=? AND session_date<?
+      ORDER BY session_date DESC, reconciled_at DESC
+      LIMIT 1`, read.id, sessionDate);
+
+    const previousPage = prior?.new_page ?? read.starting_page ?? null;
+    const previousPercent = prior?.new_percent ?? read.starting_percent ?? null;
+
     const newPage = input.page === "" || input.page == null ? read.progress_page : Number(input.page);
     const newPercent = input.percent === "" || input.percent == null ? read.progress_percent : Number(input.percent);
-    const pagesRead = newPage != null && read.progress_page != null ? Math.max(0, newPage - read.progress_page) : 0;
+
+    const pagesRead = newPage != null && previousPage != null
+      ? Math.max(0, Number(newPage) - Number(previousPage))
+      : 0;
+
     const timestamp = now();
-    await db.batch([
-      db.prepare("INSERT INTO daily_checkins (id,read_id,book_id,session_date,previous_page,new_page,previous_percent,new_percent,pages_read,listening_speed,reconciled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(id("checkin"),read.id,read.book_id,input.session_date,read.progress_page,newPage,read.progress_percent,newPercent,pagesRead,input.listening_speed ?? read.listening_speed,timestamp),
-      db.prepare("UPDATE read_throughs SET progress_page=?,progress_percent=?,listening_speed=?,updated_at=? WHERE id=?").bind(newPage,newPercent,Number(input.listening_speed || read.listening_speed || 1),timestamp,read.id)
-    ]);
-    return json({ ok: true });
+    const speed = input.listening_speed ?? read.listening_speed;
+
+    await db.prepare(`INSERT INTO daily_checkins
+      (id,read_id,book_id,session_date,previous_page,new_page,previous_percent,new_percent,pages_read,listening_speed,reconciled_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(read_id,session_date) DO UPDATE SET
+        previous_page=excluded.previous_page,
+        new_page=excluded.new_page,
+        previous_percent=excluded.previous_percent,
+        new_percent=excluded.new_percent,
+        pages_read=excluded.pages_read,
+        listening_speed=excluded.listening_speed,
+        reconciled_at=excluded.reconciled_at
+    `).bind(
+      id("checkin"),read.id,read.book_id,sessionDate,
+      previousPage,newPage,previousPercent,newPercent,pagesRead,speed,timestamp
+    ).run();
+
+    // Historical reconciliation must never roll the live read-through backward.
+    // Only advance the live progress when the reconciled value is ahead.
+    const livePage = read.progress_page == null
+      ? newPage
+      : newPage == null ? read.progress_page : Math.max(Number(read.progress_page), Number(newPage));
+    const livePercent = read.progress_percent == null
+      ? newPercent
+      : newPercent == null ? read.progress_percent : Math.max(Number(read.progress_percent), Number(newPercent));
+
+    await db.prepare("UPDATE read_throughs SET progress_page=?,progress_percent=?,listening_speed=?,updated_at=? WHERE id=?")
+      .bind(livePage,livePercent,Number(input.listening_speed || read.listening_speed || 1),timestamp,read.id).run();
+
+    return json({
+      ok:true,
+      session_date:sessionDate,
+      previous_page:previousPage,
+      new_page:newPage,
+      pages_read:pagesRead,
+      previous_percent:previousPercent,
+      new_percent:newPercent
+    });
   }
 
   if (path === "/api/goals/daily" && method === "POST") {
@@ -548,7 +602,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.10" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.11" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

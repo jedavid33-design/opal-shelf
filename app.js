@@ -145,46 +145,21 @@ function readCard(read) {
 
 
 function dailyPagePace(day) {
-  // Daily pages/hour uses only page-based reading. Audiobook time is deliberately excluded.
-  const rows = day?.reads || day?.items || day?.books || [];
-  let pages = 0;
-  let seconds = 0;
+  // Daily pace = page gains / timed page-reading hours.
+  // Audiobook sessions are deliberately excluded from the denominator.
+  const pages=Number(day?.pages||0);
+  if(pages<=0)return "";
 
-  for (const row of rows) {
-    const read = state.data.reads.find(r => r.id === (row.read_id || row.readId));
-    const book = bookById(row.book_id || row.bookId || read?.book_id);
-    const format = String(read?.format || book?.format_metadata || book?.format || "").toLowerCase();
-    if (format === "audiobook") continue;
-
-    const startPage = Number(row.start_page ?? row.page_start ?? row.startPage);
-    const endPage = Number(row.end_page ?? row.page_end ?? row.endPage);
-    if (Number.isFinite(startPage) && Number.isFinite(endPage) && endPage > startPage) {
-      pages += endPage - startPage;
-      seconds += Number(row.duration_seconds ?? row.durationSeconds ?? row.seconds ?? 0) || 0;
-    }
+  let seconds=0;
+  for(const contribution of day.contributions?.values?.()||[]) {
+    const read=state.data.reads.find(candidate=>candidate.id===contribution.readId);
+    if(!read || String(read.format||"").toLowerCase()==="audiobook")continue;
+    seconds+=Number(contribution.seconds||0);
   }
 
-  // Fallback to the underlying session/progress data when the day summary rows do not expose duration.
-  if (pages > 0 && seconds <= 0 && day?.local_date) {
-    const eligibleReadIds = new Set(
-      state.data.reads
-        .filter(read => String(read.format || "").toLowerCase() !== "audiobook")
-        .map(read => read.id)
-    );
-    seconds = state.data.sessions
-      .filter(session =>
-        session.local_date === day.local_date &&
-        session.ended_at &&
-        eligibleReadIds.has(session.read_id)
-      )
-      .reduce((sum, session) => sum + (Number(session.duration_seconds) || 0), 0);
-  }
-
-  if (pages <= 0 || seconds <= 0) return "";
-  const pace = pages / (seconds / 3600);
-  return `${Math.round(pace)} pg/hr`;
+  if(seconds<=0)return "";
+  return `${Math.round(pages/(seconds/3600))} pg/hr`;
 }
-
 
 function dailyHistoryRows() {
   const days=new Map();
@@ -650,12 +625,13 @@ function showNextCheckin(){
   if(item.format==="print"||item.format==="other")fields=field("Where did you finish? Page","page",item.progress_page,"number");
   else if(item.format==="ebook")fields=`${field("Page (optional)","page",item.progress_page,"number")}${field("Progress percent (optional)","percent",item.progress_percent,"number")}`;
   else fields=`${field("Current progress","percent",item.progress_percent??0,"number")}${runtime?field("Content position (h:mm)","content_position",formatAudioPosition(runtime*Number(item.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",item.listening_speed||1,"number")}`;
-  document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">Yesterday’s Reading</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;
+  const reconciliationLabel=item.session_date===addDateKey(dateKey(),-1)?"Yesterday’s Reading":`Reading on ${fmtDate(item.session_date)}`;
+  document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">${esc(reconciliationLabel)}</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><p class="subtle">This progress will be saved to <strong>${esc(fmtDate(item.session_date))}</strong>.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;
   checkinDialog.showModal();
   const form=document.querySelector("#checkin-form");
   if(item.format==="audiobook"&&runtime)bindAudioProgress(form,runtime,{breakdownId:"unused-checkin-breakdown"});
   document.querySelector("#checkin-later").addEventListener("click",()=>checkinDialog.close());
-  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));Object.assign(data,{read_id:item.read_id,session_date:item.session_date});try{await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});state.pendingCheckins.shift();checkinDialog.close();await refresh();if(state.pendingCheckins.length)showNextCheckin();toast("Yesterday’s progress saved");}catch(error){toast(error.message);}});
+  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));Object.assign(data,{read_id:item.read_id,session_date:item.session_date});try{await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});state.pendingCheckins.shift();checkinDialog.close();await refresh();if(state.pendingCheckins.length)showNextCheckin();toast(`Progress saved to ${fmtDate(item.session_date)}`);}catch(error){toast(error.message);}});
 }
 
 function formDialogContent(html){document.querySelector("#form-dialog-content").innerHTML=html;formDialog.showModal();document.querySelectorAll("#form-dialog-content [data-close]").forEach((el)=>el.addEventListener("click",()=>formDialog.close()));}
