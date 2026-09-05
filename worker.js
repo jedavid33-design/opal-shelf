@@ -548,7 +548,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.8" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.9" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

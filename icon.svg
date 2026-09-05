@@ -1,6 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#38291f"/>
-  <path d="M120 102c51-18 101-7 136 22 35-29 85-40 136-22v286c-49-15-99-4-136 26-37-30-87-41-136-26V102z" fill="#f6efe4"/>
-  <path d="M256 126v286" stroke="#c48973" stroke-width="18"/>
-  <path d="M154 154c33-7 59-2 78 9M154 204c33-7 59-2 78 9M280 163c19-11 45-16 78-9M280 213c19-11 45-16 78-9" fill="none" stroke="#9a6a55" stroke-width="13" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8f7aa1"/>
+      <stop offset=".48" stop-color="#c8bfd4"/>
+      <stop offset=".72" stop-color="#a9c7d0"/>
+      <stop offset="1" stop-color="#d8b7c9"/>
+    </linearGradient>
+    <radialGradient id="shine" cx=".28" cy=".18" r=".55">
+      <stop offset="0" stop-color="#fff" stop-opacity=".92"/>
+      <stop offset=".33" stop-color="#fff" stop-opacity=".20"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#shine)"/>
+  <path d="M120 102c51-18 101-7 136 22 35-29 85-40 136-22v286c-49-15-99-4-136 26-37-30-87-41-136-26V102z" fill="#fbf9fd" fill-opacity=".90"/>
+  <path d="M256 126v286" stroke="#8f7398" stroke-width="18"/>
+  <path d="M154 154c33-7 59-2 78 9M154 204c33-7 59-2 78 9M280 163c19-11 45-16 78-9M280 213c19-11 45-16 78-9" fill="none" stroke="#8a8198" stroke-width="13" stroke-linecap="round"/>
 </svg>

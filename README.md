@@ -1,22 +1,26 @@
-# Opal Shelf v0.0.8 — GitHub Pages frontend
+# Opal Shelf v0.0.9 — Opal Treatment™
 
-Flat GitHub Pages frontend package for Opal Shelf v0.0.8.
+Single flat source-of-truth package for GitHub.
 
 ## Install
 
-1. Deploy the v0.0.8 Worker.
-2. Confirm `/health` reports `0.0.8`.
-3. Replace the GitHub repository root files with this ZIP.
+1. Deploy `worker.js` to the existing Cloudflare Worker.
+2. Confirm `/health` reports `0.0.9`.
+3. Replace the GitHub repository root files with all files from this ZIP.
 
 No D1 migration is required.
 
-## v0.0.8
+## v0.0.9
 
-- Adds **Edit session** to the quiet `•••` repair menu under Reading History / Edit Read-through.
-- Session edits can correct date, start/end time, duration, and audiobook listening speed.
-- Start/end edits recalculate duration. Direct duration edits preserve start time and shift the end time.
-- Keeps Move session and Delete session.
-- Hardens book-cover persistence so routine Edit Book saves do not silently clear an existing cover.
-- Adds a small **Find cover** repair action in Edit Book using the existing Open Library search.
-- Intentional cover removal requires the explicit Remove current cover checkbox.
-- No ratings.
+Visual-only Opal Treatment™ pass:
+
+- frosted glass surfaces
+- soft opalescent lavender / blue / blush highlights
+- Avenir Next / Avenir / system typography stack
+- refined floating glass bottom navigation
+- opalized progress bars, chips, cards, panels, modals, and shelf surfaces
+- refreshed opal app icon
+- preserves book covers as the visual focus
+- preserves all v0.0.8 reading, timer, session, progress, audiobook, goal, history, and repair behavior
+
+No ratings were added.
