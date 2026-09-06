@@ -579,3 +579,10 @@ h1, h2, h3, .brand strong {
   }
   .bottom-nav { background: #4f485f; }
 }
+
+/* v0.0.12 read-through summary */
+.read-summary { margin: 18px 0; }
+.read-summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; }
+.read-summary-grid span { display:grid; gap:2px; padding:12px 14px; border:1px solid rgba(134,120,153,.16); border-radius:16px; background:linear-gradient(145deg,rgba(255,255,255,.72),rgba(255,255,255,.45)); }
+.read-summary-grid strong { font-size:1.02rem; color:var(--ink); }
+.read-summary-grid small { color:var(--muted); font-size:.76rem; }

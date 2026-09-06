@@ -1,20 +1,21 @@
-# Opal Shelf v0.0.11
+# Opal Shelf v0.0.12
 
 Single flat source-of-truth package.
 
-## Install
+Install:
 1. Deploy `worker.js`.
-2. Confirm `/health` reports `0.0.11`.
+2. Confirm `/health` reports `0.0.12`.
 3. Replace the GitHub repository root files with this ZIP.
 
-No D1 migration is required.
+No manual D1 migration is required. The Worker creates the additive `read_state_periods` table automatically.
 
-## v0.0.11
-- Fixes first-open-of-the-day progress reconciliation so the popup is explicitly saved to the historical session date it is reconciling.
-- Historical page deltas are derived from the most recent earlier daily check-in (or the read-through starting point), rather than from the already-updated live progress value.
-- Saving a historical reconciliation cannot roll the current read-through backward.
-- The popup now shows the exact date receiving the reconciliation.
-- Repairs the v0.0.10 Daily Progress `pg/hr` display so it uses page gains divided by timed physical/ebook reading time and excludes audiobook time.
-- Preserves all v0.0.10 Opal styling and existing reading/session/audiobook behavior.
-
-No ratings.
+v0.0.12:
+- Read-through box score in Reading History and Edit Read-through.
+- Physical/ebook: timed reading, pages read, whole-read-through average pg/hr, reading days, active days.
+- Audiobook: book length, actual persisted listening time, effective speed, reading days, active days.
+- Adds Paused as a real read-through state.
+- Active days include ordinary days you simply did not read.
+- Explicit Paused/DNF periods are excluded; resuming the same read-through begins active-day counting again.
+- Daily Progress derives page-based percentages from the page-count snapshot instead of showing meaningless 0% → 0%.
+- Existing pre-v0.0.12 pause/DNF gaps cannot be reconstructed if they were never recorded.
+- Preserves the Opal Treatment and existing session/progress behavior.

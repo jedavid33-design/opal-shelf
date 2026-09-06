@@ -207,7 +207,13 @@ function progressChangeLine(contribution,read,book) {
   if(!checkin)return "";
   const parts=[];
   if(checkin.previous_page!=null&&checkin.new_page!=null)parts.push(`Page ${checkin.previous_page} → ${checkin.new_page}${Number(checkin.pages_read)>0?` (+${checkin.pages_read})`:""}`);
-  if(checkin.previous_percent!=null&&checkin.new_percent!=null) {
+  const pageTotal=Number(read?.page_count_snapshot??book?.page_count??0);
+  if(read?.format!=="audiobook"&&pageTotal&&checkin.previous_page!=null&&checkin.new_page!=null) {
+    const previousPct=Math.max(0,Math.min(100,Number(checkin.previous_page)/pageTotal*100));
+    const newPct=Math.max(0,Math.min(100,Number(checkin.new_page)/pageTotal*100));
+    const deltaPct=newPct-previousPct;
+    parts.push(`${Math.round(previousPct)}% → ${Math.round(newPct)}%${Math.abs(deltaPct)>=0.5?` (${deltaPct>=0?"+":""}${Math.round(deltaPct)}%)`:""}`);
+  } else if(checkin.previous_percent!=null&&checkin.new_percent!=null) {
     parts.push(`${Number(checkin.previous_percent).toFixed(1).replace(/\.0$/,"")}% → ${Number(checkin.new_percent).toFixed(1).replace(/\.0$/,"")}%`);
     const runtime=Number(read?.audiobook_runtime_seconds_snapshot??book?.audiobook_runtime_seconds??0);
     const speed=Number(checkin.listening_speed||0);
@@ -535,7 +541,7 @@ function readHistoryItem(read) {
   const snapshot=read.format==="audiobook"&&read.audiobook_runtime_seconds_snapshot
     ? `${fmtDuration(read.audiobook_runtime_seconds_snapshot)} audiobook snapshot`
     : read.page_count_snapshot ? `${read.page_count_snapshot} page snapshot` : "No length snapshot";
-  return `<article class="history-item"><div class="history-summary"><div><strong>${readLabel(read)} • ${readDateRange(read)} • ${esc(formatLabel(read.format))}</strong><br><span class="status-chip">${read.state==="active"?"Reading":esc(read.state)}</span> <span class="subtle">${timed} timed • ${snapshot}</span>${read.notes?`<p class="read-notes">${esc(read.notes)}</p>`:""}</div><div class="history-actions"><button class="button small" data-edit-read="${read.id}">Edit Read-through</button><button class="button small danger" data-delete-read="${read.id}">Delete</button></div></div>${sessionSection(read)}</article>`;
+  return `<article class="history-item"><div class="history-summary"><div><strong>${readLabel(read)} • ${readDateRange(read)} • ${esc(formatLabel(read.format))}</strong><br><span class="status-chip">${read.state==="active"?"Reading":read.state==="paused"?"Paused":esc(read.state)}</span> <span class="subtle">${timed} timed • ${snapshot}</span>${read.notes?`<p class="read-notes">${esc(read.notes)}</p>`:""}</div><div class="history-actions"><button class="button small" data-edit-read="${read.id}">Edit Read-through</button><button class="button small danger" data-delete-read="${read.id}">Delete</button></div></div>${readThroughSummary(read)}${sessionSection(read)}</article>`;
 }
 
 function openEditBook(book) {
@@ -587,19 +593,52 @@ async function completeRead(read,action){try{if(state.activeTimer?.read_id===rea
 
 async function finishReadFromCard(readId){const read=state.data.reads.find((item)=>item.id===readId);if(!read)return;if(!confirm(`Finish ${readLabel(read)} today?`))return;await completeRead(read,"finish");}
 
+
+function readThroughSummary(read) {
+  const sessions=sessionsForRead(read.id).filter(s=>s.ended_at);
+  const checkins=state.data.checkins.filter(c=>c.read_id===read.id);
+  const readingDates=new Set([...sessions.map(s=>s.local_date),...checkins.filter(c=>Number(c.pages_read||0)>0).map(c=>c.session_date)].filter(Boolean));
+  const timed=sessions.reduce((sum,s)=>sum+Number(s.duration_seconds||0),0);
+  const activeDays=Number(read.active_days||0);
+  const format=String(read.format||"").toLowerCase();
+  const stats=[];
+
+  if(format==="audiobook") {
+    const runtime=Number(read.audiobook_runtime_seconds_snapshot||0);
+    const startPct=Number(read.starting_percent||0);
+    const endPct=read.state==="finished"?100:Number(read.final_percent??read.progress_percent??startPct);
+    const content=Math.max(0,runtime*((endPct-startPct)/100));
+    if(runtime>0)stats.push([fmtDuration(runtime),"book length"]);
+    if(timed>0)stats.push([fmtDuration(timed),"actual listening"]);
+    if(content>0&&timed>0)stats.push([`${(content/timed).toFixed(2)}×`,"effective speed"]);
+  } else {
+    const pagesFromCheckins=checkins.reduce((sum,c)=>sum+Math.max(0,Number(c.pages_read||0)),0);
+    const start=Number(read.starting_page);
+    const end=Number(read.final_page??read.progress_page);
+    const pages=pagesFromCheckins>0?pagesFromCheckins:(Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,end-start):0);
+    if(timed>0)stats.push([fmtDuration(timed),"timed reading"]);
+    if(pages>0)stats.push([String(pages),"pages read"]);
+    if(pages>0&&timed>0)stats.push([`${Math.round(pages/(timed/3600))} pg/hr`,"average pace"]);
+  }
+  stats.push([String(readingDates.size),`reading day${readingDates.size===1?"":"s"}`]);
+  if(activeDays>0)stats.push([String(activeDays),`active day${activeDays===1?"":"s"}`]);
+
+  return `<section class="read-summary"><p class="eyebrow">Read-through summary</p><div class="read-summary-grid">${stats.map(([value,label])=>`<span><strong>${esc(value)}</strong><small>${esc(label)}</small></span>`).join("")}</div>${activeDays>0?`<p class="subtle">Active days include days you simply didn’t read. Explicit Paused/DNF time is excluded; resuming this read-through starts counting active days again.</p>`:""}</section>`;
+}
+
 function openEditRead(readId) {
   const read=state.data.reads.find((item)=>item.id===readId), book=read&&bookById(read.book_id);
   if(!read||!book)return;
   const audioRuntime=Number(read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds??0);
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)} · ${esc(book.title)}</p><h1>Edit Read-through</h1><p class="subtle">Changes here affect only this reading record. Book title, author, and series remain under Edit Book.</p><form id="edit-read-form"><div class="form-grid">
     ${field("Start date","start_date",read.start_date,"date",true)}${field("Finish date","finish_date",read.finish_date,"date")}
-    <div class="field"><label for="read-state">Status</label><select id="read-state" name="state"><option value="active" ${read.state==="active"?"selected":""}>Reading</option><option value="finished" ${read.state==="finished"?"selected":""}>Finished</option><option value="dnf" ${read.state==="dnf"?"selected":""}>DNF This Read</option></select></div>
+    <div class="field"><label for="read-state">Status</label><select id="read-state" name="state"><option value="active" ${read.state==="active"?"selected":""}>Reading</option><option value="paused" ${read.state==="paused"?"selected":""}>Paused</option><option value="finished" ${read.state==="finished"?"selected":""}>Finished</option><option value="dnf" ${read.state==="dnf"?"selected":""}>DNF This Read</option></select></div>
     <div class="field"><label for="edit-read-format">Format</label><select id="edit-read-format" name="format"><option value="print" ${read.format==="print"?"selected":""}>Physical</option><option value="ebook" ${read.format==="ebook"?"selected":""}>Ebook</option><option value="audiobook" ${read.format==="audiobook"?"selected":""}>Audiobook</option><option value="other" ${read.format==="other"?"selected":""}>Other</option></select></div>
     ${field("Current page","progress_page",read.progress_page,"number")}${field("Current percent","progress_percent",read.progress_percent,"number")}${read.format==="audiobook"&&audioRuntime?field("Content position (h:mm)","edit_content_position",formatAudioPosition(audioRuntime*Number(read.progress_percent||0)/100)):""}
     ${field("Listening speed","listening_speed",read.listening_speed||1,"number")}${field("Edition page-count snapshot","page_count_snapshot",read.page_count_snapshot,"number")}
     ${field("Audiobook snapshot hours","snapshot_hours",Math.floor(audioRuntime/3600),"number")}${field("Audiobook snapshot minutes","snapshot_minutes",Math.round(audioRuntime%3600/60),"number")}
     <div class="field span-2"><label for="edit-read-notes">Read-through notes</label><textarea id="edit-read-notes" name="notes">${esc(read.notes||"")}</textarea></div>
-  </div>${sessionSection(read,{open:true})}<p class="subtle">Changing Finished or DNF back to Reading repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
+  </div>${readThroughSummary(read)}${sessionSection(read,{open:true})}<p class="subtle">Changing Paused, Finished, or DNF back to Reading resumes/repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
   const form=document.querySelector("#edit-read-form");
   if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,audioRuntime,{percentName:"progress_percent",positionName:"edit_content_position",breakdownId:"unused-audio-breakdown"});
   form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.audiobook_runtime_seconds_snapshot=runtimeFromFields(data.snapshot_hours,data.snapshot_minutes);delete data.snapshot_hours;delete data.snapshot_minutes;try{await api(`/api/reads/${read.id}`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast("Read-through updated");}catch(error){toast(error.message);}});

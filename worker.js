@@ -141,7 +141,7 @@ async function syncBookStatus(db, bookId, timestamp = now()) {
   const book = await first(db, "SELECT status, book_dnf FROM books WHERE id=?", bookId);
   if (!book) return;
   const counts = await first(db, `SELECT
-    SUM(CASE WHEN state='active' THEN 1 ELSE 0 END) AS active_count,
+    SUM(CASE WHEN state IN ('active','paused') THEN 1 ELSE 0 END) AS active_count,
     SUM(CASE WHEN state='finished' THEN 1 ELSE 0 END) AS finished_count
     FROM read_throughs WHERE book_id=?`, bookId);
   const status = Number(counts?.active_count || 0) > 0
@@ -154,9 +154,52 @@ async function syncBookStatus(db, bookId, timestamp = now()) {
   await db.prepare("UPDATE books SET status=?,updated_at=? WHERE id=?").bind(status,timestamp,bookId).run();
 }
 
+
+async function ensureReadStatePeriods(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS read_state_periods (
+    id TEXT PRIMARY KEY,
+    read_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    started_date TEXT NOT NULL,
+    ended_date TEXT,
+    created_at TEXT NOT NULL
+  )`).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_read_state_periods_read ON read_state_periods(read_id,started_date)").run();
+
+  // Backfill one best-known period for existing reads. Historical pauses/DNF gaps
+  // from before this release cannot be reconstructed if they were never recorded.
+  const missing=await all(db, `SELECT rt.id,rt.state,rt.start_date,rt.finish_date,rt.created_at
+    FROM read_throughs rt
+    LEFT JOIN read_state_periods rsp ON rsp.read_id=rt.id
+    WHERE rsp.id IS NULL`);
+  for(const read of missing) {
+    const historicalState=read.state==="active" ? "active" : read.state;
+    await db.prepare("INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at) VALUES (?,?,?,?,?,?)")
+      .bind(id("state"),read.id,historicalState,read.start_date,
+        read.state==="active" ? null : (read.finish_date||read.start_date),
+        read.created_at||now()).run();
+  }
+}
+
+async function recordReadStateChange(db, read, nextState, changeDate) {
+  await ensureReadStatePeriods(db);
+  const current=await first(db,"SELECT * FROM read_state_periods WHERE read_id=? AND ended_date IS NULL ORDER BY started_date DESC LIMIT 1",read.id);
+  if(current && current.state===nextState)return;
+  if(current)await db.prepare("UPDATE read_state_periods SET ended_date=? WHERE id=?").bind(changeDate,current.id).run();
+  await db.prepare("INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at) VALUES (?,?,?,?,?,?)")
+    .bind(id("state"),read.id,nextState,changeDate,null,now()).run();
+}
+
+function inclusiveDays(start,end) {
+  const a=new Date(`${start}T00:00:00Z`),b=new Date(`${end}T00:00:00Z`);
+  if(Number.isNaN(a.getTime())||Number.isNaN(b.getTime())||b<a)return 0;
+  return Math.floor((b-a)/86400000)+1;
+}
+
 async function bootstrap(db, url) {
   const today = url.searchParams.get("date") || localDateKey();
-  const [bookRows, reads, sessions, goals, annualGoals, shelves, memberships, checkins] = await Promise.all([
+  await ensureReadStatePeriods(db);
+  const [bookRows, reads, sessions, goals, annualGoals, shelves, memberships, checkins, statePeriods] = await Promise.all([
     all(db, "SELECT * FROM books ORDER BY favorite DESC, title COLLATE NOCASE"),
     all(db, "SELECT * FROM read_throughs ORDER BY created_at DESC"),
     all(db, "SELECT * FROM reading_sessions ORDER BY started_at DESC"),
@@ -164,9 +207,15 @@ async function bootstrap(db, url) {
     all(db, "SELECT * FROM annual_goals ORDER BY year DESC"),
     all(db, "SELECT * FROM custom_shelves ORDER BY name COLLATE NOCASE"),
     all(db, "SELECT * FROM shelf_books ORDER BY sort_order, added_at"),
-    all(db, "SELECT * FROM daily_checkins ORDER BY session_date DESC")
+    all(db, "SELECT * FROM daily_checkins ORDER BY session_date DESC"),
+    all(db, "SELECT * FROM read_state_periods ORDER BY started_date")
   ]);
   const books = bookRows.map(decodeBook);
+  for (const read of reads) {
+    read.active_days = statePeriods
+      .filter((period)=>period.read_id===read.id && period.state==="active")
+      .reduce((sum,period)=>sum+inclusiveDays(period.started_date,period.ended_date||today),0);
+  }
   const activity = {};
   for (const session of sessions.filter((item) => item.ended_at)) {
     activity[session.local_date] ||= { seconds: 0, pages: 0 };
@@ -190,6 +239,7 @@ async function bootstrap(db, url) {
     shelves,
     memberships,
     checkins,
+    statePeriods,
     dashboard: {
       todaySeconds: activity[today]?.seconds || 0,
       todayPages: activity[today]?.pages || 0,
@@ -295,6 +345,9 @@ async function handleApi(request, env, url) {
       ),
       db.prepare("UPDATE books SET status='reading',book_dnf=0,updated_at=? WHERE id=?").bind(timestamp,input.book_id)
     ]);
+    await ensureReadStatePeriods(db);
+    await db.prepare("INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at) VALUES (?,?,?,?,?,?)")
+      .bind(id("state"),readId,"active",input.start_date||input.local_date,null,timestamp).run();
     return json(await first(db, "SELECT * FROM read_throughs WHERE id=?", readId), 201);
   }
 
@@ -303,7 +356,7 @@ async function handleApi(request, env, url) {
     const input = await parseJson(request);
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", readMatch[1]);
     if (!read) throw new HttpError(404, "Read-through not found");
-    const state = ["active","finished","dnf"].includes(input.state) ? input.state : read.state;
+    const state = ["active","paused","finished","dnf"].includes(input.state) ? input.state : read.state;
     const format = ["print","ebook","audiobook","other"].includes(input.format) ? input.format : read.format;
     const startDate = String(input.start_date || "").trim();
     if (!startDate) throw new HttpError(400, "Start date is required");
@@ -311,7 +364,7 @@ async function handleApi(request, env, url) {
       const conflict = await first(db, "SELECT id FROM read_throughs WHERE book_id=? AND state='active' AND id<>?", read.book_id, read.id);
       if (conflict) throw new HttpError(409, "This book already has another active read-through");
     }
-    const finishDate = state === "active" ? null : String(input.finish_date || read.finish_date || "").trim() || null;
+    const finishDate = (state === "active" || state === "paused") ? null : String(input.finish_date || read.finish_date || "").trim() || null;
     const page = input.progress_page === "" || input.progress_page == null ? null : Math.max(0,Number(input.progress_page));
     const percent = input.progress_percent === "" || input.progress_percent == null ? null : Math.min(100,Math.max(0,Number(input.progress_percent)));
     const pageSnapshot = input.page_count_snapshot === "" || input.page_count_snapshot == null ? null : Math.max(0,Number(input.page_count_snapshot));
@@ -323,6 +376,7 @@ async function handleApi(request, env, url) {
       WHERE id=?`).bind(
         startDate,finishDate,state,format,page,percent,Number(input.listening_speed || 1),String(input.notes || "").trim() || null,pageSnapshot,audioSnapshot,timestamp,read.id
       ).run();
+    if (state !== read.state) await recordReadStateChange(db, read, state, String(input.state_change_date || input.local_date || localDateKey()));
     await syncBookStatus(db, read.book_id, timestamp);
     return json(await first(db, "SELECT * FROM read_throughs WHERE id=?", read.id));
   }
@@ -394,6 +448,7 @@ async function handleApi(request, env, url) {
     const state = finishMatch[2] === "finish" ? "finished" : "dnf";
     const timestamp = now();
     await db.prepare("UPDATE read_throughs SET state=?,finish_date=?,final_page=COALESCE(?,progress_page),final_percent=COALESCE(?,progress_percent),progress_percent=CASE WHEN ?='finished' THEN 100 ELSE progress_percent END,updated_at=? WHERE id=?").bind(state,input.finish_date || input.local_date,input.page ?? null,input.percent ?? null,state,timestamp,read.id).run();
+    await recordReadStateChange(db, read, state, String(input.finish_date || input.local_date || localDateKey()));
     await syncBookStatus(db, read.book_id, timestamp);
     return json({ ok: true });
   }
@@ -602,7 +657,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.11" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.12" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
