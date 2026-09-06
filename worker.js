@@ -409,7 +409,12 @@ async function handleApi(request, env, url) {
       const book = await first(db, "SELECT audiobook_runtime_seconds FROM books WHERE id=?", read.book_id);
       const runtime = Number(read.audiobook_runtime_seconds_snapshot || book?.audiobook_runtime_seconds || 0);
       if (runtime > 0) {
-        const expectedSeconds = Math.max(1, Math.round(runtime * (percent - Number(read.progress_percent ?? read.starting_percent ?? 0)) / 100 / speed));
+        const oldPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
+        const deltaPercent = percent - oldPercent;
+        // Keep all audiobook math in seconds end-to-end.
+        // Do not round audiobook positions or intermediate content duration to whole minutes.
+        const contentDeltaSeconds = runtime * (deltaPercent / 100);
+        const expectedSeconds = Math.max(1, Math.round(contentDeltaSeconds / speed));
         const coverageStart = new Date(read.updated_at || read.created_at || timestamp);
         const relevantSessions = await all(db, `SELECT started_at, ended_at, duration_seconds FROM reading_sessions
           WHERE read_id=? AND (ended_at IS NULL OR ended_at>?)
@@ -657,7 +662,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.12" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.13" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
