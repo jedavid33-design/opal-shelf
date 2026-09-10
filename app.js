@@ -482,9 +482,65 @@ function parseSessionDuration(value) {
   return null;
 }
 
+function normalizeTimeValue(value) {
+  const match=String(value||"").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if(!match)return "";
+  const hour=Math.max(0,Math.min(23,Number(match[1])));
+  const minute=Math.max(0,Math.min(59,Number(match[2])));
+  return `${String(hour).padStart(2,"0")}:${String(minute).padStart(2,"0")}`;
+}
+
 function localDateTimeIso(day,time) {
-  const value=new Date(`${day}T${time}`);
+  const normalized=normalizeTimeValue(time);
+  if(!normalized)return null;
+  const value=new Date(`${day}T${normalized}:00`);
   return Number.isNaN(value.getTime())?null:value.toISOString();
+}
+
+function secondsBetweenLocalTimes(day,startTime,endTime) {
+  const start=localDateTimeIso(day,startTime);
+  const end=localDateTimeIso(day,endTime);
+  if(!start||!end)return null;
+  const seconds=Math.round((new Date(end)-new Date(start))/1000);
+  return seconds>=0?seconds:null;
+}
+
+function updateSessionFormLinks(form,{durationTouchedRef}) {
+  const dateInput=form.elements.local_date;
+  const startInput=form.elements.started_time;
+  const endInput=form.elements.ended_time;
+  const durationInput=form.elements.duration_text;
+  if(!dateInput||!startInput||!endInput||!durationInput)return;
+
+  // iOS Safari is happiest with minute-precision native time inputs.
+  startInput.step=60;
+  endInput.step=60;
+  startInput.value=normalizeTimeValue(startInput.value);
+  endInput.value=normalizeTimeValue(endInput.value);
+
+  const syncDurationFromTimes=()=>{
+    if(durationTouchedRef.value)return;
+    const seconds=secondsBetweenLocalTimes(dateInput.value,startInput.value,endInput.value);
+    if(seconds==null)return;
+    durationInput.value=sessionDurationInput(seconds);
+  };
+
+  const syncEndFromDuration=()=>{
+    const seconds=parseSessionDuration(durationInput.value);
+    const startIso=localDateTimeIso(dateInput.value,startInput.value);
+    if(seconds==null||!startIso)return;
+    const end=new Date(new Date(startIso).getTime()+seconds*1000);
+    endInput.value=`${String(end.getHours()).padStart(2,"0")}:${String(end.getMinutes()).padStart(2,"0")}`;
+  };
+
+  startInput.addEventListener("input",()=>{durationTouchedRef.value=false;syncDurationFromTimes();});
+  endInput.addEventListener("input",()=>{durationTouchedRef.value=false;syncDurationFromTimes();});
+  dateInput.addEventListener("input",()=>{durationTouchedRef.value=false;syncDurationFromTimes();});
+  durationInput.addEventListener("input",()=>{durationTouchedRef.value=true;syncEndFromDuration();});
+
+  // Initial fill should always match the visible start/end values.
+  durationTouchedRef.value=false;
+  syncDurationFromTimes();
 }
 
 function reopenAfterSessionEdit({readId,bookId}) {
@@ -507,6 +563,8 @@ function openEditSession(sessionId,{returnReadId=null,returnBookId=null}={}) {
   </div><div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Session</button></div></form>`);
   const form=document.querySelector("#edit-session-form");
   const originalDurationText=sessionDurationInput(originalDuration);
+  const durationTouchedRef={value:false};
+  updateSessionFormLinks(form,{durationTouchedRef});
   form.addEventListener("submit",async(event)=>{
     event.preventDefault();
     const data=Object.fromEntries(new FormData(form));
@@ -516,7 +574,7 @@ function openEditSession(sessionId,{returnReadId=null,returnBookId=null}={}) {
     const parsedDuration=parseSessionDuration(data.duration_text);
     if(parsedDuration==null){toast("Use duration like 0:25:30");return;}
     const payload={local_date:data.local_date,started_at:startedAt};
-    if(String(data.duration_text).trim()!==originalDurationText)payload.duration_seconds=parsedDuration;
+    if(durationTouchedRef.value) payload.duration_seconds=parsedDuration;
     else payload.ended_at=endedAt;
     if(data.listening_speed!=="")payload.listening_speed=Number(data.listening_speed);
     try{
@@ -553,6 +611,8 @@ function openAddSession(readId,{returnReadId=null,returnBookId=null}={}) {
 
   const form=document.querySelector("#add-session-form");
   const originalDurationText="0:30:00";
+  const durationTouchedRef={value:false};
+  updateSessionFormLinks(form,{durationTouchedRef});
   form.addEventListener("submit",async(event)=>{
     event.preventDefault();
     const data=Object.fromEntries(new FormData(form));
@@ -567,7 +627,7 @@ function openAddSession(readId,{returnReadId=null,returnBookId=null}={}) {
       local_date:data.local_date,
       started_at:startedAt
     };
-    if(String(data.duration_text).trim()!==originalDurationText) payload.duration_seconds=parsedDuration;
+    if(durationTouchedRef.value) payload.duration_seconds=parsedDuration;
     else payload.ended_at=endedAt;
     if(data.listening_speed!=="") payload.listening_speed=Number(data.listening_speed);
 
