@@ -462,7 +462,9 @@ function sessionTimeLabel(session) {
 
 function timeInputValue(iso) {
   const date=new Date(iso);
-  return `${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}:${String(date.getSeconds()).padStart(2,"0")}`;
+  // Native mobile time inputs expect canonical 24-hour HH:MM at minute precision.
+  // iOS may display this as 6:40 PM, but the underlying value remains 18:40.
+  return `${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}`;
 }
 
 function sessionDurationInput(seconds) {
