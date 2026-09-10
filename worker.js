@@ -262,6 +262,7 @@ async function pendingCheckins(db, date) {
     JOIN read_throughs rt ON rt.id = rs.read_id
     LEFT JOIN daily_checkins dc ON dc.read_id = rs.read_id AND dc.session_date = rs.local_date
     WHERE rs.local_date < ? AND rs.ended_at IS NOT NULL AND dc.id IS NULL
+      AND rt.state = 'active'
     GROUP BY rs.read_id, rs.book_id, rs.local_date
     ORDER BY rs.local_date, MIN(rs.started_at)
   `, date);
@@ -399,7 +400,16 @@ async function handleApi(request, env, url) {
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", progressMatch[1]);
     if (!read) throw new HttpError(404, "Read-through not found");
     const page = input.page === "" || input.page == null ? read.progress_page : Math.max(0, Number(input.page));
-    const percent = input.percent === "" || input.percent == null ? read.progress_percent : Math.min(100, Math.max(0, Number(input.percent)));
+    let percent = input.percent === "" || input.percent == null ? read.progress_percent : Math.min(100, Math.max(0, Number(input.percent)));
+    if (read.format === "audiobook" && input.content_position) {
+      const positionMatch = String(input.content_position).trim().match(/^(\d+):([0-5]\d)$/);
+      if (!positionMatch) throw new HttpError(400, "Content position must be h:mm");
+      const contentSeconds = (Number(positionMatch[1]) * 60 + Number(positionMatch[2])) * 60;
+      const bookForRuntime = await first(db, "SELECT audiobook_runtime_seconds FROM books WHERE id=?", read.book_id);
+      const exactRuntime = Number(read.audiobook_runtime_seconds_snapshot || bookForRuntime?.audiobook_runtime_seconds || 0);
+      if (!exactRuntime || contentSeconds > exactRuntime) throw new HttpError(400, "Content position is beyond the audiobook length");
+      percent = contentSeconds / exactRuntime * 100;
+    }
     const speed = Math.max(0.05, Number(input.listening_speed || read.listening_speed || 1));
     const timestamp = now();
     let inferredSeconds = 0;
@@ -467,6 +477,47 @@ async function handleApi(request, env, url) {
     const startedAt = input.started_at || now();
     const sessionId = id("session");
     await db.prepare("INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,listening_speed,created_at) VALUES (?,?,?,?,?,?,?)").bind(sessionId,read.id,read.book_id,input.local_date,startedAt,read.format === "audiobook" ? Number(read.listening_speed || 1) : null,now()).run();
+    return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionId), 201);
+  }
+
+  if (path === "/api/sessions" && method === "POST") {
+    const input = await parseJson(request);
+    const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", input.read_id);
+    if (!read) throw new HttpError(404, "Read-through not found");
+
+    const localDate = String(input.local_date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) throw new HttpError(400, "Session date must be YYYY-MM-DD");
+
+    const startedAt = String(input.started_at || "");
+    const startDate = new Date(startedAt);
+    if (Number.isNaN(startDate.getTime())) throw new HttpError(400, "Invalid session start time");
+
+    let endedAt = input.ended_at ? String(input.ended_at) : null;
+    let duration = null;
+
+    if (input.duration_seconds != null && input.duration_seconds !== "") {
+      duration = Math.max(0, Math.round(Number(input.duration_seconds)));
+      if (!Number.isFinite(duration)) throw new HttpError(400, "Invalid session duration");
+      endedAt = new Date(startDate.getTime() + duration * 1000).toISOString();
+    } else {
+      const endDate = new Date(endedAt);
+      if (!endedAt || Number.isNaN(endDate.getTime()) || endDate < startDate) throw new HttpError(400, "Session end must be after session start");
+      duration = durationSeconds(startDate, endDate);
+    }
+
+    let listeningSpeed = null;
+    if (read.format === "audiobook") {
+      listeningSpeed = Number(input.listening_speed || read.listening_speed || 1);
+      if (!Number.isFinite(listeningSpeed) || listeningSpeed <= 0) throw new HttpError(400, "Listening speed must be greater than zero");
+    }
+
+    const sessionId = id("session");
+    const timestamp = now();
+    await db.prepare(`INSERT INTO reading_sessions
+      (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`)
+      .bind(sessionId,read.id,read.book_id,localDate,startedAt,endedAt,duration,listeningSpeed,timestamp).run();
+
     return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionId), 201);
   }
 
@@ -662,7 +713,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.13" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.14" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

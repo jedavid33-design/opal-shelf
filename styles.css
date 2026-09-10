@@ -586,3 +586,12 @@ h1, h2, h3, .brand strong {
 .read-summary-grid span { display:grid; gap:2px; padding:12px 14px; border:1px solid rgba(134,120,153,.16); border-radius:16px; background:linear-gradient(145deg,rgba(255,255,255,.72),rgba(255,255,255,.45)); }
 .read-summary-grid strong { font-size:1.02rem; color:var(--ink); }
 .read-summary-grid small { color:var(--muted); font-size:.76rem; }
+
+/* v0.0.14 session repair action sheet */
+.session-action-shell { max-width: 420px; }
+.session-action-list, .session-destination-list { display:grid; gap:10px; margin-top:16px; }
+.session-action { width:100%; justify-content:flex-start; padding:14px 16px; }
+.session-destination { display:grid; gap:3px; width:100%; text-align:left; justify-items:start; padding:13px 15px; }
+.session-destination small { color:var(--muted); font-weight:500; }
+.session-tools { display:flex; justify-content:flex-end; padding:10px 0 4px; }
+.button.tiny { padding:7px 10px; min-height:0; font-size:.82rem; border-radius:12px; }

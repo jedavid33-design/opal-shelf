@@ -4,6 +4,7 @@ const app = document.querySelector("#app");
 const bookDialog = document.querySelector("#book-dialog");
 const formDialog = document.querySelector("#form-dialog");
 const checkinDialog = document.querySelector("#checkin-dialog");
+const sessionDialog = document.querySelector("#session-dialog");
 
 const esc = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" }[char]));
 const dateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
@@ -382,7 +383,7 @@ function bindAudioProgress(form,runtime,{percentName="percent",positionName="con
     const seconds=parseAudioPosition(positionInput.value);
     if(seconds==null||seconds>runtime){positionInput.setCustomValidity(`Use h:mm up to ${formatAudioPosition(runtime)}`);return;}
     positionInput.setCustomValidity("");
-    percentInput.value=String(Math.round(seconds/runtime*10000)/100);
+    percentInput.value=String(seconds/runtime*100);
     updateBreakdown();
   });
   percentInput.addEventListener("input",()=>{
@@ -525,6 +526,59 @@ function openEditSession(sessionId,{returnReadId=null,returnBookId=null}={}) {
     }catch(error){toast(error.message);}
   });
 }
+
+function openAddSession(readId,{returnReadId=null,returnBookId=null}={}) {
+  const read=state.data.reads.find(item=>item.id===readId);
+  if(!read)return;
+  const book=bookById(read.book_id);
+  const nowDate=new Date();
+  const endTime=timeInputValue(nowDate.toISOString());
+  const startDate=new Date(nowDate.getTime()-30*60*1000);
+  const startTime=timeInputValue(startDate.toISOString());
+
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button>
+    <p class="eyebrow">Session repair · ${esc(book?.title||"Unknown book")}</p>
+    <h1>Add Session</h1>
+    <p class="subtle">For reading you forgot to time. Enter start/end, or edit the duration directly.</p>
+    <form id="add-session-form"><div class="form-grid">
+      ${field("Date","local_date",dateKey(),"date",true)}
+      ${field("Start time","started_time",startTime,"time",true)}
+      ${field("End time","ended_time",endTime,"time",true)}
+      ${field("Duration (h:mm:ss)","duration_text","0:30:00","text",true)}
+      ${read.format==="audiobook"?field("Listening speed","listening_speed",read.listening_speed||1,"number"):""}
+    </div>
+    <div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Add Session</button></div></form>`);
+
+  const form=document.querySelector("#add-session-form");
+  const originalDurationText="0:30:00";
+  form.addEventListener("submit",async(event)=>{
+    event.preventDefault();
+    const data=Object.fromEntries(new FormData(form));
+    const startedAt=localDateTimeIso(data.local_date,data.started_time);
+    const endedAt=localDateTimeIso(data.local_date,data.ended_time);
+    const parsedDuration=parseSessionDuration(data.duration_text);
+    if(!startedAt||!endedAt){toast("Choose a valid date and time");return;}
+    if(parsedDuration==null){toast("Use duration like 0:25:30");return;}
+
+    const payload={
+      read_id:read.id,
+      local_date:data.local_date,
+      started_at:startedAt
+    };
+    if(String(data.duration_text).trim()!==originalDurationText) payload.duration_seconds=parsedDuration;
+    else payload.ended_at=endedAt;
+    if(data.listening_speed!=="") payload.listening_speed=Number(data.listening_speed);
+
+    try{
+      await api("/api/sessions",{method:"POST",body:JSON.stringify(payload)});
+      formDialog.close();
+      await refresh();
+      reopenAfterSessionEdit({readId:returnReadId||read.id,bookId:returnBookId||read.book_id});
+      toast("Session added");
+    }catch(error){toast(error.message);}
+  });
+}
+
 function sessionRows(read) {
   const sessions=sessionsForRead(read.id).sort((a,b)=>new Date(b.started_at)-new Date(a.started_at));
   if(!sessions.length)return `<p class="subtle session-empty">No completed timer sessions for this read-through.</p>`;
@@ -534,7 +588,7 @@ function sessionRows(read) {
 }
 function sessionSection(read,{open=false}={}) {
   const count=sessionsForRead(read.id).length;
-  return `<details class="session-details" ${open?"open":""}><summary>Sessions <span class="subtle">${count}</span></summary><div class="session-list">${sessionRows(read)}</div></details>`;
+  return `<details class="session-details" ${open?"open":""}><summary>Sessions <span class="subtle">${count}</span></summary><div class="session-tools"><button type="button" class="button tiny" data-add-session="${read.id}">+ Add session</button></div><div class="session-list">${sessionRows(read)}</div></details>`;
 }
 function readHistoryItem(read) {
   const timed=fmtDuration(sessionsForRead(read.id).reduce((sum,s)=>sum+Number(s.duration_seconds||0),0));
@@ -684,33 +738,103 @@ window.addEventListener("focus",()=>refresh({checkins:true}).catch(()=>{}));
 if("serviceWorker" in navigator) window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
 refresh({checkins:true}).catch(showFatal);
 
-async function sessionOptions(sessionId) {
+function closeSessionDialog(){ if(sessionDialog.open)sessionDialog.close(); }
+
+function showSessionActions(sessionId) {
   const session=state.data.sessions.find(item=>item.id===sessionId);
   if(!session||!session.ended_at)return;
-  const currentRead=state.data.reads.find(read=>read.id===session.read_id);
-  const editWasOpen=formDialog.open,historyWasOpen=bookDialog.open;
-  const historyBookId=currentRead?.book_id;
-  const choice=prompt(`Session ${fmtDuration(session.duration_seconds)} on ${fmtDate(session.local_date)}\n\nType E to edit, M to move, or D to delete it.`);
-  if(!choice)return;
-  const action=choice.trim().toLowerCase();
-  if(action==="e"){
-    if(editWasOpen)formDialog.close();
-    if(historyWasOpen)bookDialog.close();
-    openEditSession(session.id,{returnReadId:editWasOpen?currentRead?.id:null,returnBookId:historyWasOpen?historyBookId:null});
-    return;
-  }
-  if(action==="d"){
-    if(!confirm(`Delete this ${fmtDuration(session.duration_seconds)} session? This will reduce that day's reading total.`))return;
-    try{if(editWasOpen)formDialog.close();if(historyWasOpen)bookDialog.close();await api(`/api/sessions/${session.id}`,{method:"DELETE"});await refresh();if(editWasOpen&&currentRead)openEditRead(currentRead.id);else if(historyWasOpen&&historyBookId)openBook(historyBookId);toast("Session deleted");}catch(error){toast(error.message);}
-    return;
-  }
-  if(action!=="m")return;
-  const destinations=state.data.reads.filter(read=>read.id!==session.read_id).map((read,index)=>{const book=bookById(read.book_id);return {read,index:index+1,label:`${index+1}. ${book?.title||"Unknown book"} · ${readLabel(read)} · ${readDateRange(read)}`};});
-  if(!destinations.length){toast("There is no other read-through to move this session to");return;}
-  const picked=prompt(`Move session to which read-through?\n\n${destinations.map(item=>item.label).join("\n")}\n\nEnter the number:`);
-  const destination=destinations.find(item=>String(item.index)===String(picked||"").trim());
-  if(!destination){if(picked)toast("That read-through number wasn't found");return;}
-  try{if(editWasOpen)formDialog.close();if(historyWasOpen)bookDialog.close();await api(`/api/sessions/${session.id}`,{method:"PUT",body:JSON.stringify({read_id:destination.read.id})});await refresh();if(editWasOpen&&currentRead)openEditRead(currentRead.id);else if(historyWasOpen&&historyBookId)openBook(historyBookId);toast("Session moved");}catch(error){toast(error.message);}
+  const read=state.data.reads.find(item=>item.id===session.read_id);
+  const book=bookById(session.book_id);
+
+  document.querySelector("#session-dialog-content").innerHTML=`
+    <button class="modal-close" data-session-close aria-label="Close">×</button>
+    <p class="eyebrow">Session options</p>
+    <h2>${esc(book?.title||"Reading session")}</h2>
+    <p class="subtle">${esc(fmtDate(session.local_date))} · ${esc(sessionTimeLabel(session))} · ${esc(fmtDuration(session.duration_seconds))}</p>
+    <div class="session-action-list">
+      <button type="button" class="button session-action" data-session-action="edit">Edit session</button>
+      <button type="button" class="button session-action" data-session-action="move">Move session</button>
+      <button type="button" class="button danger session-action" data-session-action="delete">Delete session</button>
+    </div>`;
+
+  sessionDialog.showModal();
+
+  document.querySelector("[data-session-close]")?.addEventListener("click",closeSessionDialog);
+  document.querySelectorAll("[data-session-action]").forEach(button=>button.addEventListener("click",async()=>{
+    const action=button.dataset.sessionAction;
+    const editWasOpen=formDialog.open;
+    const historyWasOpen=bookDialog.open;
+    const historyBookId=read?.book_id;
+    closeSessionDialog();
+
+    if(action==="edit"){
+      if(editWasOpen)formDialog.close();
+      openEditSession(session.id,{returnReadId:editWasOpen?read?.id:null,returnBookId:historyWasOpen?historyBookId:null});
+      return;
+    }
+
+    if(action==="delete"){
+      if(!confirm(`Delete this ${fmtDuration(session.duration_seconds)} session? This will reduce that day's reading total.`))return;
+      try{
+        await api(`/api/sessions/${session.id}`,{method:"DELETE"});
+        await refresh();
+        if(editWasOpen&&read)openEditRead(read.id);
+        else if(historyWasOpen&&historyBookId)openBook(historyBookId);
+        toast("Session deleted");
+      }catch(error){toast(error.message);}
+      return;
+    }
+
+    if(action==="move"){
+      showMoveSession(session.id,{returnReadId:editWasOpen?read?.id:null,returnBookId:historyWasOpen?historyBookId:null});
+    }
+  }));
 }
 
-document.addEventListener("click",(event)=>{const button=event.target.closest("[data-session-menu]");if(button)sessionOptions(button.dataset.sessionMenu);});
+function showMoveSession(sessionId,{returnReadId=null,returnBookId=null}={}) {
+  const session=state.data.sessions.find(item=>item.id===sessionId);
+  if(!session)return;
+  const destinations=state.data.reads.filter(read=>read.id!==session.read_id);
+  if(!destinations.length){toast("There is no other read-through to move this session to");return;}
+
+  document.querySelector("#session-dialog-content").innerHTML=`
+    <button class="modal-close" data-session-close aria-label="Close">×</button>
+    <p class="eyebrow">Move session</p>
+    <h2>Choose a read-through</h2>
+    <div class="session-destination-list">
+      ${destinations.map(read=>{
+        const book=bookById(read.book_id);
+        return `<button type="button" class="button session-destination" data-move-to="${read.id}">
+          <strong>${esc(book?.title||"Unknown book")}</strong>
+          <small>${esc(readLabel(read))} · ${esc(readDateRange(read))}</small>
+        </button>`;
+      }).join("")}
+    </div>`;
+
+  sessionDialog.showModal();
+  document.querySelector("[data-session-close]")?.addEventListener("click",closeSessionDialog);
+  document.querySelectorAll("[data-move-to]").forEach(button=>button.addEventListener("click",async()=>{
+    try{
+      await api(`/api/sessions/${session.id}`,{method:"PUT",body:JSON.stringify({read_id:button.dataset.moveTo})});
+      closeSessionDialog();
+      await refresh();
+      reopenAfterSessionEdit({readId:returnReadId,bookId:returnBookId});
+      toast("Session moved");
+    }catch(error){toast(error.message);}
+  }));
+}
+
+
+document.addEventListener("click",(event)=>{
+  const menuButton=event.target.closest("[data-session-menu]");
+  if(menuButton){showSessionActions(menuButton.dataset.sessionMenu);return;}
+  const addButton=event.target.closest("[data-add-session]");
+  if(addButton){
+    const readId=addButton.dataset.addSession;
+    const read=state.data.reads.find(item=>item.id===readId);
+    const editWasOpen=formDialog.open;
+    const historyWasOpen=bookDialog.open;
+    if(editWasOpen)formDialog.close();
+    openAddSession(readId,{returnReadId:editWasOpen?readId:null,returnBookId:historyWasOpen?read?.book_id:null});
+  }
+});
