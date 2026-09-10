@@ -247,14 +247,17 @@ function recentShelf() {
 
 function shelfView() {
   const visible = state.data.books.filter((book)=>book.status!=="dnf");
-  const system = [
-    ["Reading", visible.filter((b)=>b.status==="reading")],
-    ["Want to Read", visible.filter((b)=>b.status==="want")],
-    ["Finished", visible.filter((b)=>b.status==="finished")]
-  ].filter(([,books])=>books.length);
+  const reading = visible.filter((book)=>book.status==="reading");
+  const want = visible.filter((book)=>book.status==="want");
+  const finished = visible.filter((book)=>book.status==="finished");
   const custom = state.data.shelves.map((shelf)=>[shelf.name, visible.filter((book)=>state.data.memberships.some((m)=>m.shelf_id===shelf.id&&m.book_id===book.id)),shelf]);
-  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">DNF books stay searchable in Book Archive, but off the visual shelves.</p></div><button class="button" id="new-shelf">＋ New Shelf</button></div>
-    ${system.length||custom.length ? [...system,...custom].map(([name,books,shelf])=>bookshelf(name,books,shelf)).join("") : emptyState("▥","No books yet","Add your first book to begin building the shelf.","Add Book")}
+
+  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">Current reads stay face-out. Want to Read and Finished live on the shelf as spines — tap one to pull it out and see the front.</p></div><button class="button" id="new-shelf">＋ New Shelf</button></div>
+    ${reading.length ? bookshelf("Reading",reading) : ""}
+    ${want.length ? spineBookshelf("Want to Read",want,"want") : ""}
+    ${finished.length ? spineBookshelf("Finished Reading",finished,"finished") : ""}
+    ${custom.map(([name,books,shelf])=>bookshelf(name,books,shelf)).join("")}
+    ${!reading.length&&!want.length&&!finished.length&&!custom.length ? emptyState("▥","No books yet","Add your first book to begin building the shelf.","Add Book") : ""}
     <section class="section"><div class="section-title"><h2>Book Archive</h2><span class="subtle">Includes DNF</span></div>
       <div class="panel">${state.data.books.length ? state.data.books.map((book)=>`<button class="button ghost full" data-book="${book.id}" style="text-align:left">${esc(book.title)} — ${esc(authors(book))} <span class="status-chip">${esc(book.status)}</span></button>`).join("") : "No archived books."}</div>
     </section>`;
@@ -263,6 +266,23 @@ function shelfView() {
 function bookshelf(name, books, shelf) {
   return `<section class="shelf-unit"><div class="shelf-label"><h2>${esc(name)}</h2>${shelf?`<span><button class="button ghost small" data-rename-shelf="${shelf.id}">Rename</button><button class="button ghost small danger" data-delete-shelf="${shelf.id}">Delete</button></span>`:""}</div>
     <div class="books-row">${books.length ? books.map((book)=>`<button class="shelf-book" data-book="${book.id}">${cover(book)}<strong>${esc(book.title)}</strong></button>`).join("") : `<p class="subtle">No books here yet.</p>`}</div><div class="shelf-board"></div></section>`;
+}
+
+function spineBookshelf(name,books,status) {
+  const palette=status==="finished"
+    ? ["#615970","#74677f","#82748e","#6b6278","#8d7d98","#706a84"]
+    : ["#826f8f","#927b9d","#71869a","#9a7f96","#786f91","#8b819b"];
+
+  return `<section class="shelf-unit spine-shelf"><div class="shelf-label"><h2>${esc(name)}</h2><span class="subtle">${books.length} book${books.length===1?"":"s"}</span></div>
+    <div class="spine-row">${books.map((book,index)=>{
+      const author=authors(book);
+      const spine=palette[index%palette.length];
+      return `<button class="book-spine" type="button" data-book="${book.id}" style="--spine:${spine}" aria-label="Pull out ${esc(book.title)}">
+        <span class="spine-title">${esc(book.title)}</span>
+        ${author?`<span class="spine-author">${esc(author)}</span>`:""}
+      </button>`;
+    }).join("")}</div><div class="shelf-board spine-board"></div>
+    <p class="spine-hint">Tap a spine to pull the book off the shelf.</p></section>`;
 }
 
 function goalsView() {

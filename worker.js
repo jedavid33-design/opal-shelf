@@ -460,12 +460,83 @@ async function handleApi(request, env, url) {
     const input = await parseJson(request);
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", finishMatch[1]);
     if (!read) throw new HttpError(404, "Read-through not found");
+
     const state = finishMatch[2] === "finish" ? "finished" : "dnf";
     const timestamp = now();
-    await db.prepare("UPDATE read_throughs SET state=?,finish_date=?,final_page=COALESCE(?,progress_page),final_percent=COALESCE(?,progress_percent),progress_percent=CASE WHEN ?='finished' THEN 100 ELSE progress_percent END,updated_at=? WHERE id=?").bind(state,input.finish_date || input.local_date,input.page ?? null,input.percent ?? null,state,timestamp,read.id).run();
+    let inferredSeconds = 0;
+    let coveredSeconds = 0;
+
+    // For audiobooks, Finish Read is also the final progress update.
+    // Save the remaining listening interval BEFORE closing the read-through.
+    if (state === "finished" && read.format === "audiobook") {
+      const currentPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
+
+      if (currentPercent < 100) {
+        const book = await first(db, "SELECT audiobook_runtime_seconds FROM books WHERE id=?", read.book_id);
+        const runtime = Number(read.audiobook_runtime_seconds_snapshot || book?.audiobook_runtime_seconds || 0);
+        const speed = Math.max(0.05, Number(input.listening_speed || read.listening_speed || 1));
+
+        if (runtime > 0) {
+          const contentDeltaSeconds = runtime * ((100 - currentPercent) / 100);
+          const expectedSeconds = Math.max(1, Math.round(contentDeltaSeconds / speed));
+
+          // Preserve the existing double-count protection: timer activity since the
+          // last progress save covers part of this final interval.
+          const coverageStart = new Date(read.updated_at || read.created_at || timestamp);
+          const coverageEnd = new Date(timestamp);
+          const relevantSessions = await all(db, `SELECT started_at, ended_at, duration_seconds
+            FROM reading_sessions
+            WHERE read_id=? AND (ended_at IS NULL OR ended_at>?)
+            ORDER BY started_at`, read.id, coverageStart.toISOString());
+
+          for (const session of relevantSessions) {
+            const sessionStart = new Date(session.started_at);
+            const sessionEnd = session.ended_at ? new Date(session.ended_at) : coverageEnd;
+            const overlapStart = sessionStart > coverageStart ? sessionStart : coverageStart;
+            const overlapEnd = sessionEnd < coverageEnd ? sessionEnd : coverageEnd;
+            if (overlapEnd > overlapStart) {
+              coveredSeconds += Math.max(0, Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 1000));
+            }
+          }
+
+          inferredSeconds = Math.max(0, expectedSeconds - coveredSeconds);
+
+          if (inferredSeconds > 0) {
+            const endedAt = timestamp;
+            const startedAt = new Date(new Date(endedAt).getTime() - inferredSeconds * 1000).toISOString();
+            await db.prepare(`INSERT INTO reading_sessions
+              (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?)`)
+              .bind(
+                id("session"), read.id, read.book_id,
+                input.local_date || endedAt.slice(0,10),
+                startedAt, endedAt, inferredSeconds, speed, timestamp
+              ).run();
+          }
+        }
+      }
+    }
+
+    await db.prepare(
+      "UPDATE read_throughs SET state=?,finish_date=?,final_page=COALESCE(?,progress_page),final_percent=COALESCE(?,progress_percent),progress_percent=CASE WHEN ?='finished' THEN 100 ELSE progress_percent END,updated_at=? WHERE id=?"
+    ).bind(
+      state,
+      input.finish_date || input.local_date,
+      input.page ?? null,
+      state === "finished" ? 100 : (input.percent ?? null),
+      state,
+      timestamp,
+      read.id
+    ).run();
+
     await recordReadStateChange(db, read, state, String(input.finish_date || input.local_date || localDateKey()));
     await syncBookStatus(db, read.book_id, timestamp);
-    return json({ ok: true });
+
+    return json({
+      ok: true,
+      inferred_duration_seconds: inferredSeconds,
+      timer_covered_seconds: coveredSeconds
+    });
   }
 
   if (path === "/api/sessions/start" && method === "POST") {
@@ -713,7 +784,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.16" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.17" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

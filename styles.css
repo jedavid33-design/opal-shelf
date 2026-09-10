@@ -595,3 +595,87 @@ h1, h2, h3, .brand strong {
 .session-destination small { color:var(--muted); font-weight:500; }
 .session-tools { display:flex; justify-content:flex-end; padding:10px 0 4px; }
 .button.tiny { padding:7px 10px; min-height:0; font-size:.82rem; border-radius:12px; }
+
+/* v0.0.17 — spine shelves */
+.spine-shelf { padding-bottom: 8px; }
+.spine-row {
+  display:flex;
+  align-items:flex-end;
+  gap:4px;
+  min-height:214px;
+  overflow-x:auto;
+  padding:16px 14px 3px;
+  scrollbar-width:none;
+  background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(235,230,243,.20));
+}
+.spine-row::-webkit-scrollbar { display:none; }
+
+.book-spine {
+  position:relative;
+  flex:0 0 44px;
+  height:194px;
+  padding:12px 6px 10px;
+  border:0;
+  border-radius:7px 7px 3px 3px;
+  color:#fff;
+  cursor:pointer;
+  writing-mode:vertical-rl;
+  transform:rotate(180deg);
+  background:
+    linear-gradient(90deg,rgba(255,255,255,.19),transparent 18%,rgba(0,0,0,.06) 82%,rgba(255,255,255,.10)),
+    var(--spine);
+  box-shadow:
+    inset 1px 0 rgba(255,255,255,.18),
+    inset -1px 0 rgba(0,0,0,.10),
+    0 6px 12px rgba(65,54,82,.14);
+  transition:transform .16s ease, box-shadow .16s ease;
+}
+.book-spine:nth-child(3n+2){height:181px;flex-basis:39px}
+.book-spine:nth-child(4n){height:202px;flex-basis:48px}
+.book-spine:nth-child(5n){height:187px;flex-basis:42px}
+.book-spine:hover,
+.book-spine:focus-visible {
+  transform:rotate(180deg) translateY(-9px);
+  box-shadow:
+    inset 1px 0 rgba(255,255,255,.20),
+    0 14px 22px rgba(65,54,82,.20);
+  outline:none;
+}
+.spine-title {
+  display:block;
+  max-height:158px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-weight:800;
+  font-size:.83rem;
+  line-height:1;
+  letter-spacing:-.01em;
+}
+.spine-author {
+  display:block;
+  max-height:148px;
+  margin-inline-start:8px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:.58rem;
+  opacity:.78;
+  font-weight:600;
+}
+.spine-board { margin-top:0; }
+.spine-hint {
+  margin:10px 14px 4px;
+  color:var(--muted);
+  font-size:.78rem;
+}
+
+@media (max-width:760px) {
+  .spine-row { min-height:186px; padding-inline:10px; }
+  .book-spine { height:166px; flex-basis:39px; }
+  .book-spine:nth-child(3n+2){height:154px;flex-basis:35px}
+  .book-spine:nth-child(4n){height:174px;flex-basis:42px}
+  .book-spine:nth-child(5n){height:161px;flex-basis:37px}
+  .spine-title { max-height:136px; font-size:.77rem; }
+  .spine-author { max-height:126px; font-size:.54rem; }
+}
