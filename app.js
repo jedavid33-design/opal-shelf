@@ -380,7 +380,7 @@ function bookFields(book = {}, { editing = false } = {}) {
 
 function field(label,name,value="",type="text",required=false) {
   const decimalSpeed = name === "listening_speed" ? ` step="0.05" min="0.05" inputmode="decimal"` : "";
-  const decimalPercent = ["percent","progress_percent","starting_percent"].includes(name) ? ` step="0.1" min="0" max="100" inputmode="decimal"` : "";
+  const decimalPercent = ["percent","progress_percent","starting_percent"].includes(name) ? ` step="any" min="0" max="100" inputmode="decimal"` : "";
   return `<div class="field"><label for="${name}">${esc(label)}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value??"")}"${decimalSpeed}${decimalPercent} ${required?"required":""}></div>`;
 }
 
@@ -403,7 +403,7 @@ function bindAudioProgress(form,runtime,{percentName="percent",positionName="con
     const seconds=parseAudioPosition(positionInput.value);
     if(seconds==null||seconds>runtime){positionInput.setCustomValidity(`Use h:mm up to ${formatAudioPosition(runtime)}`);return;}
     positionInput.setCustomValidity("");
-    percentInput.value=String(seconds/runtime*100);
+    percentInput.value=String(Math.round((seconds/runtime*100 + Number.EPSILON)*100)/100);
     updateBreakdown();
   });
   percentInput.addEventListener("input",()=>{
