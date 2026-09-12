@@ -709,16 +709,62 @@ function openStartRead(book) {
   document.querySelector("#start-read-form").addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));data.book_id=book.id;data.local_date=state.data.today;try{await api("/api/reads",{method:"POST",body:JSON.stringify(data)});formDialog.close();await refresh();toast("New read-through started");}catch(error){toast(error.message);}});
 }
 
+
+function bindPageProgress(form,pageTotal) {
+  const pageInput=form.elements.page;
+  const percentInput=form.elements.percent;
+  const total=Number(pageTotal||0);
+  if(!pageInput||!percentInput||!total)return;
+
+  percentInput.step="any";
+  percentInput.min="0";
+  percentInput.max="100";
+  pageInput.min="0";
+  pageInput.max=String(total);
+
+  let syncing=false;
+
+  const syncPercentFromPage=()=>{
+    if(syncing)return;
+    const page=Number(pageInput.value);
+    if(!Number.isFinite(page))return;
+    syncing=true;
+    const pct=Math.max(0,Math.min(100,page/total*100));
+    percentInput.value=String(Math.round((pct+Number.EPSILON)*100)/100);
+    syncing=false;
+  };
+
+  const syncPageFromPercent=()=>{
+    if(syncing)return;
+    const pct=Number(percentInput.value);
+    if(!Number.isFinite(pct))return;
+    syncing=true;
+    const page=Math.max(0,Math.min(total,Math.round(total*pct/100)));
+    pageInput.value=String(page);
+    syncing=false;
+  };
+
+  pageInput.addEventListener("input",syncPercentFromPage);
+  percentInput.addEventListener("input",syncPageFromPercent);
+
+  // Normalize whatever is already saved when the form opens.
+  if(pageInput.value!=="" && Number.isFinite(Number(pageInput.value))) syncPercentFromPage();
+  else if(percentInput.value!=="" && Number.isFinite(Number(percentInput.value))) syncPageFromPercent();
+}
+
 function openProgress(readId) {
   const read=state.data.reads.find((item)=>item.id===readId), book=bookById(read.book_id);
   const audioRuntime=read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds;
   const pageTotal=read.page_count_snapshot??book.page_count;
   const audioFields=read.format==="audiobook"?`${field("Percent complete","percent",read.progress_percent??0,"number")}${audioRuntime?field("Content position (h:mm)","content_position",formatAudioPosition(audioRuntime*Number(read.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",read.listening_speed||1,"number")}`:"";
-  const standardFields=read.format!=="audiobook"?`${field("Current page","page",read.progress_page,"number")}${read.format!=="print"&&!pageTotal?field("Percent complete","percent",read.progress_percent,"number"):""}`:"";
+  const standardFields=read.format!=="audiobook"
+    ? `${field("Current page","page",read.progress_page,"number")}${pageTotal?field("Percent complete","percent",read.progress_percent??(Number(read.progress_page||0)/Number(pageTotal)*100),"number"):field("Percent complete","percent",read.progress_percent,"number")}`
+    : "";
   const audio=read.format==="audiobook"&&audioRuntime?`<div id="audio-progress-breakdown">${audioBreakdown(audioRuntime,read.progress_percent||0,read.listening_speed||1)}</div>`:"";
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">${readLabel(read)}</p><h1>Update Progress</h1><p>${esc(book.title)}</p><form id="progress-form"><div class="form-grid">${audioFields||standardFields}</div>${audio}<div class="form-actions"><button type="button" class="button danger" id="mark-dnf">DNF This Read</button><button type="button" class="button" id="mark-finished">Finish Read</button><button class="button primary">Save Progress</button></div></form>`);
   const form=document.querySelector("#progress-form");
   if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,Number(audioRuntime));
+  if(read.format!=="audiobook"&&pageTotal)bindPageProgress(form,Number(pageTotal));
   form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.local_date=state.data.today;try{const result=await api(`/api/reads/${read.id}/progress`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast(result.inferred_duration_seconds?`Progress updated · ${fmtDuration(result.inferred_duration_seconds)} added today`:"Progress updated");}catch(error){toast(error.message);}});
   document.querySelector("#mark-finished").addEventListener("click",()=>{if(confirm(`Finish ${readLabel(read)} today?`))completeRead(read,"finish");});
   document.querySelector("#mark-dnf").addEventListener("click",()=>{if(confirm(`Mark only ${readLabel(read)} as DNF? The underlying book and earlier reads will be kept.`))completeRead(read,"dnf");});

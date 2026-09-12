@@ -1,15 +1,22 @@
-# Opal Shelf v0.0.18
+# Opal Shelf v0.0.19
+
+Single flat source-of-truth package.
 
 ## Install
 1. Deploy `worker.js`.
-2. Confirm `/health` reports `0.0.18`.
+2. Confirm `/health` reports `0.0.19`.
 3. Replace the GitHub repository root files with this ZIP.
 
 No D1 migration is required.
 
-## v0.0.18
-- Percent inputs now accept arbitrary decimal values on iOS/Safari.
-- Content-position syncing writes a human-friendly percentage rounded to two decimal places instead of a long floating-point tail.
-- Stored calculations retain decimal percentage precision.
-- Display percentages continue to use standard nearest-integer rounding, so 65.7% displays as 66%.
-- Preserves all v0.0.17 audiobook-finish and spine-shelf changes.
+## v0.0.19
+- Restores live page ↔ percent synchronization for print/ebook progress when a page-count snapshot exists.
+- Entering percent recalculates Current page immediately.
+- Entering Current page recalculates Percent complete immediately.
+- The field edited most recently is treated as the source of truth.
+- Percent → page uses normal nearest-page rounding.
+- Page → percent keeps up to two decimal places in the editable field.
+- Both values are saved together.
+- Preserves v0.0.18 decimal-percent handling, audiobook logic, session tools, read-through summaries, and spine shelves.
+
+No ratings.
