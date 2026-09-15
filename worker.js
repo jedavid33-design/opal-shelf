@@ -116,6 +116,7 @@ function cleanBook(input) {
     genres_json: JSON.stringify(list(input.genres)),
     format_metadata: String(input.format_metadata || "").trim() || null,
     isbn: String(input.isbn || "").trim() || null,
+    asin: String(input.asin || "").trim().toUpperCase() || null,
     publisher: String(input.publisher || "").trim() || null,
     publication_date: String(input.publication_date || "").trim() || null,
     page_count: input.page_count === "" || input.page_count == null ? null : Math.max(0, Number(input.page_count)),
@@ -268,11 +269,20 @@ async function pendingCheckins(db, date) {
   `, date);
 }
 
+
+async function ensureBookAsin(db) {
+  const columns = await all(db, "PRAGMA table_info(books)");
+  if (!columns.some((column)=>column.name==="asin")) {
+    await db.prepare("ALTER TABLE books ADD COLUMN asin TEXT").run();
+  }
+}
+
 async function handleApi(request, env, url) {
   auth(request, env);
   const db = env.DB;
   const path = url.pathname;
   const method = request.method;
+  await ensureBookAsin(db);
 
   if (path === "/api/bootstrap" && method === "GET") return json(await bootstrap(db, url));
   if (path === "/api/checkins/pending" && method === "GET") return json(await pendingCheckins(db, url.searchParams.get("date") || localDateKey()));
@@ -280,23 +290,81 @@ async function handleApi(request, env, url) {
   if (path === "/api/books/search" && method === "GET") {
     const query = String(url.searchParams.get("q") || "").trim();
     if (query.length < 2) return json([]);
-    const fields = "key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject";
-    const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=12&fields=${fields}`, { headers: { "user-agent": "OpalShelf/0.0.1" } });
-    if (!response.ok) throw new HttpError(502, "Book search is temporarily unavailable");
-    const data = await response.json();
-    return json((data.docs || []).map((book) => ({
-      source_id: book.key,
-      title: book.title,
-      subtitle: book.subtitle || "",
-      authors: book.author_name || [],
-      cover_url: book.cover_i ? `https://covers.openlibrary.org/b/id/${book.cover_i}-L.jpg` : "",
-      isbn: book.isbn?.[0] || "",
-      publisher: book.publisher?.[0] || "",
-      publication_date: book.first_publish_year ? String(book.first_publish_year) : "",
-      page_count: book.number_of_pages_median || "",
-      language: book.language?.[0] || "",
-      genres: (book.subject || []).slice(0, 5)
-    })));
+
+    const normalized = query.replace(/[-\s]/g,"");
+    const looksIsbn = /^(?:\d{10}|\d{13})$/.test(normalized);
+    const looksAsin = /^[A-Z0-9]{10}$/i.test(normalized) && !looksIsbn;
+    const results = [];
+
+    // Open Library remains the primary catalog.
+    try {
+      const fields = "key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject";
+      const olQuery = looksIsbn ? `isbn:${normalized}` : query;
+      const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=12&fields=${fields}`, { headers: { "user-agent": "OpalShelf/0.0.20" } });
+      if (response.ok) {
+        const data = await response.json();
+        for (const book of (data.docs || [])) results.push({
+          source: "Open Library",
+          source_id: book.key,
+          title: book.title,
+          subtitle: book.subtitle || "",
+          authors: book.author_name || [],
+          cover_url: book.cover_i ? `https://covers.openlibrary.org/b/id/${book.cover_i}-L.jpg` : "",
+          isbn: book.isbn?.[0] || "",
+          asin: looksAsin ? normalized.toUpperCase() : "",
+          publisher: book.publisher?.[0] || "",
+          publication_date: book.first_publish_year ? String(book.first_publish_year) : "",
+          page_count: book.number_of_pages_median || "",
+          language: book.language?.[0] || "",
+          genres: (book.subject || []).slice(0,5)
+        });
+      }
+    } catch (_) {}
+
+    // Google Books fills many gaps, especially indie/self-published title+author searches.
+    try {
+      let googleQuery = query;
+      if (looksIsbn) googleQuery = `isbn:${normalized}`;
+      const response = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(googleQuery)}&maxResults=20&printType=books`);
+      if (response.ok) {
+        const data = await response.json();
+        for (const item of (data.items || [])) {
+          const v=item.volumeInfo || {};
+          const ids=v.industryIdentifiers || [];
+          const isbn13=ids.find(x=>x.type==="ISBN_13")?.identifier;
+          const isbn10=ids.find(x=>x.type==="ISBN_10")?.identifier;
+          results.push({
+            source: "Google Books",
+            source_id: item.id,
+            title: v.title || "",
+            subtitle: v.subtitle || "",
+            authors: v.authors || [],
+            cover_url: (v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || "").replace(/^http:/,"https:"),
+            isbn: isbn13 || isbn10 || "",
+            asin: looksAsin ? normalized.toUpperCase() : "",
+            publisher: v.publisher || "",
+            publication_date: v.publishedDate || "",
+            page_count: v.pageCount || "",
+            language: v.language || "",
+            genres: (v.categories || []).slice(0,5),
+            description: v.description || ""
+          });
+        }
+      }
+    } catch (_) {}
+
+    // De-duplicate editions that are effectively the same result.
+    const seen=new Set();
+    const unique=results.filter((book)=>{
+      if(!book.title)return false;
+      const key=[book.title.toLowerCase(),(book.authors||[]).join("|").toLowerCase(),book.isbn||""].join("::");
+      if(seen.has(key))return false;
+      seen.add(key); return true;
+    });
+
+    // ASINs are stored/searchable even when public catalogs have no direct ASIN record.
+    // A failed ASIN search therefore still leaves manual entry available with the ASIN prefilled client-side.
+    return json(unique.slice(0,20));
   }
 
   if (path === "/api/books" && method === "POST") {
@@ -304,9 +372,9 @@ async function handleApi(request, env, url) {
     const bookId = id("book");
     const timestamp = now();
     await db.prepare(`INSERT INTO books (
-      id,title,subtitle,authors_json,cover_url,series_name,series_number,description,genres_json,format_metadata,isbn,publisher,publication_date,page_count,audiobook_runtime_seconds,narrators_json,language,personal_tags_json,favorite,status,book_dnf,created_at,updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
-      bookId,input.title,input.subtitle,input.authors_json,input.cover_url,input.series_name,input.series_number,input.description,input.genres_json,input.format_metadata,input.isbn,input.publisher,input.publication_date,input.page_count,input.audiobook_runtime_seconds,input.narrators_json,input.language,input.personal_tags_json,input.favorite,input.status,input.book_dnf,timestamp,timestamp
+      id,title,subtitle,authors_json,cover_url,series_name,series_number,description,genres_json,format_metadata,isbn,asin,publisher,publication_date,page_count,audiobook_runtime_seconds,narrators_json,language,personal_tags_json,favorite,status,book_dnf,created_at,updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      bookId,input.title,input.subtitle,input.authors_json,input.cover_url,input.series_name,input.series_number,input.description,input.genres_json,input.format_metadata,input.isbn,input.asin,input.publisher,input.publication_date,input.page_count,input.audiobook_runtime_seconds,input.narrators_json,input.language,input.personal_tags_json,input.favorite,input.status,input.book_dnf,timestamp,timestamp
     ).run();
     return json(decodeBook(await first(db, "SELECT * FROM books WHERE id = ?", bookId)), 201);
   }
@@ -320,12 +388,31 @@ async function handleApi(request, env, url) {
     if (raw.remove_cover) raw.cover_url = "";
     else if (!String(raw.cover_url || "").trim() && existingBook.cover_url) raw.cover_url = existingBook.cover_url;
     const input = cleanBook(raw);
-    const result = await db.prepare(`UPDATE books SET title=?,subtitle=?,authors_json=?,cover_url=?,series_name=?,series_number=?,description=?,genres_json=?,format_metadata=?,isbn=?,publisher=?,publication_date=?,page_count=?,audiobook_runtime_seconds=?,narrators_json=?,language=?,personal_tags_json=?,favorite=?,status=?,book_dnf=?,updated_at=? WHERE id=?`).bind(
-      input.title,input.subtitle,input.authors_json,input.cover_url,input.series_name,input.series_number,input.description,input.genres_json,input.format_metadata,input.isbn,input.publisher,input.publication_date,input.page_count,input.audiobook_runtime_seconds,input.narrators_json,input.language,input.personal_tags_json,input.favorite,input.status,input.book_dnf,now(),bookId
+    const result = await db.prepare(`UPDATE books SET title=?,subtitle=?,authors_json=?,cover_url=?,series_name=?,series_number=?,description=?,genres_json=?,format_metadata=?,isbn=?,asin=?,publisher=?,publication_date=?,page_count=?,audiobook_runtime_seconds=?,narrators_json=?,language=?,personal_tags_json=?,favorite=?,status=?,book_dnf=?,updated_at=? WHERE id=?`).bind(
+      input.title,input.subtitle,input.authors_json,input.cover_url,input.series_name,input.series_number,input.description,input.genres_json,input.format_metadata,input.isbn,input.asin,input.publisher,input.publication_date,input.page_count,input.audiobook_runtime_seconds,input.narrators_json,input.language,input.personal_tags_json,input.favorite,input.status,input.book_dnf,now(),bookId
     ).run();
     if (!result.meta.changes) throw new HttpError(404, "Book not found");
     return json(decodeBook(await first(db, "SELECT * FROM books WHERE id = ?", bookId)));
   }
+  if (bookMatch && method === "DELETE") {
+    const bookId=bookMatch[1];
+    const book=await first(db,"SELECT id FROM books WHERE id=?",bookId);
+    if(!book)throw new HttpError(404,"Book not found");
+    const reads=await all(db,"SELECT id FROM read_throughs WHERE book_id=?",bookId);
+    const statements=[
+      db.prepare("DELETE FROM shelf_books WHERE book_id=?").bind(bookId),
+      db.prepare("DELETE FROM reading_sessions WHERE book_id=?").bind(bookId)
+    ];
+    for(const read of reads){
+      statements.push(db.prepare("DELETE FROM daily_checkins WHERE read_id=?").bind(read.id));
+      statements.push(db.prepare("DELETE FROM read_state_periods WHERE read_id=?").bind(read.id));
+    }
+    statements.push(db.prepare("DELETE FROM read_throughs WHERE book_id=?").bind(bookId));
+    statements.push(db.prepare("DELETE FROM books WHERE id=?").bind(bookId));
+    await db.batch(statements);
+    return json({ok:true,deleted_book_id:bookId});
+  }
+
 
   if (path === "/api/reads" && method === "POST") {
     const input = await parseJson(request);
@@ -784,7 +871,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.19" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.20" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

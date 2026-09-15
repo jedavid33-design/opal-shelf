@@ -350,7 +350,7 @@ async function timerAction(action,readId,refreshOptions={}) {
 
 function openAddBook(prefill = {}) {
   formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Add to your library</p><h1>Add Book</h1>
-    <form id="book-search-form"><div class="field"><label for="book-search">Search title, author, or ISBN</label><div style="display:flex;gap:8px"><input id="book-search" required><button class="button">Search</button></div></div></form><div id="search-results" class="search-results"></div>
+    <form id="book-search-form"><div class="field"><label for="book-search">Search title, author, ISBN, or ASIN</label><div style="display:flex;gap:8px"><input id="book-search" required><button class="button">Search</button></div></div></form><div id="search-results" class="search-results"></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:22px 0"><form id="book-form">${bookFields(prefill)}<div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Add Book</button></div></form>`);
   document.querySelector("#book-search-form").addEventListener("submit",searchBooks);
   document.querySelector("#book-form").addEventListener("submit",saveBook);
@@ -366,7 +366,7 @@ function bookFields(book = {}, { editing = false } = {}) {
     ${field("Title","title",book.title,"text",true)}${field("Subtitle","subtitle",book.subtitle)}
     ${field("Author(s), comma separated","authors",book.authors?.join(", "))}${field("Cover image URL","cover_url",book.cover_url,"url")}${coverRepair}
     ${field("Series","series_name",book.series_name)}${field("Series number","series_number",book.series_number,"number")}
-    ${field("ISBN","isbn",book.isbn)}${field("Publisher","publisher",book.publisher)}
+    ${field("ISBN","isbn",book.isbn)}${field("ASIN","asin",book.asin)}${field("Publisher","publisher",book.publisher)}
     ${field("Publication date","publication_date",book.publication_date)}${field("Page count","page_count",book.page_count,"number")}
     ${field("Audiobook hours","runtime_hours",Math.floor(runtime/3600),"number")}${field("Audiobook minutes","runtime_minutes",Math.round(runtime%3600/60),"number")}
     ${field("Narrator(s)","narrators",book.narrators?.join(", "))}${field("Language","language",book.language)}
@@ -421,7 +421,11 @@ async function searchBooks(event) {
   target.innerHTML = `<p class="subtle">Searching…</p>`;
   try {
     const results = await api(`/api/books/search?q=${encodeURIComponent(event.currentTarget.elements[0].value)}`);
-    target.innerHTML = results.length ? results.map((book,index)=>`<div class="search-result">${book.cover_url?`<img src="${esc(book.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(book.title)}</strong><br><small>${esc(book.authors.join(", "))}</small></span><button class="button small" data-use-result="${index}">Use</button></div>`).join("") : `<p>No results. Manual entry is always available.</p>`;
+    const rawQuery=String(event.currentTarget.elements[0].value||"").trim();
+    const compact=rawQuery.replace(/[-\s]/g,"");
+    const looksAsin=/^[A-Z0-9]{10}$/i.test(compact) && !/^\d{10}$/.test(compact);
+    target.innerHTML = results.length ? results.map((book,index)=>`<div class="search-result">${book.cover_url?`<img src="${esc(book.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(book.title)}</strong><br><small>${esc(book.authors.join(", "))}${book.source?` · ${esc(book.source)}`:""}</small></span><button class="button small" data-use-result="${index}">Use</button></div>`).join("") : `<p>No catalog results. Manual entry is available${looksAsin?" — the ASIN has been copied into the form.":"."}</p>`;
+    if(!results.length&&looksAsin&&document.querySelector("#book-form")?.elements.asin)document.querySelector("#book-form").elements.asin.value=compact.toUpperCase();
     target.querySelectorAll("[data-use-result]").forEach((button)=>button.addEventListener("click",()=>{
       const chosen=results[Number(button.dataset.useResult)];
       document.querySelector("#book-form").innerHTML=`${bookFields(chosen)}<div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Add Book</button></div>`;
@@ -681,7 +685,7 @@ function readHistoryItem(read) {
 }
 
 function openEditBook(book) {
-  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Book metadata</p><h1>Edit Book</h1><form id="edit-book-form">${bookFields(book,{editing:true})}<div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Changes</button></div></form>`);
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Book metadata</p><h1>Edit Book</h1><form id="edit-book-form">${bookFields(book,{editing:true})}<details class="danger-zone"><summary>Advanced book management</summary><div class="danger-zone-inner"><p class="subtle">Permanent actions live here so they are harder to tap accidentally.</p><button type="button" class="button danger" id="delete-book">Delete book permanently</button></div></details><div class="form-actions"><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Changes</button></div></form>`);
   const form=document.querySelector("#edit-book-form");
   document.querySelector("#find-cover")?.addEventListener("click",async()=>{
     const query=[form.elements.title?.value,form.elements.authors?.value].filter(Boolean).join(" ").trim();
@@ -693,6 +697,18 @@ function openEditBook(book) {
       form.elements.cover_url.value=match.cover_url;
       if(form.elements.remove_cover)form.elements.remove_cover.checked=false;
       toast("Cover found — save changes to keep it");
+    }catch(error){toast(error.message);}
+  });
+  document.querySelector("#delete-book")?.addEventListener("click",async()=>{
+    const reads=readsForBook(book.id);
+    const detail=reads.length?` This also permanently deletes ${reads.length} read-through${reads.length===1?"":"s"}, their progress history, and reading sessions.`:"";
+    if(!confirm(`Permanently delete "${book.title}" from Opal Shelf?${detail}`))return;
+    if(!confirm(`Final confirmation: delete "${book.title}"? This cannot be undone.`))return;
+    try{
+      await api(`/api/books/${book.id}`,{method:"DELETE"});
+      formDialog.close();
+      await refresh();
+      toast("Book permanently deleted");
     }catch(error){toast(error.message);}
   });
   form.addEventListener("submit",async(event)=>{event.preventDefault();try{

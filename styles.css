@@ -679,3 +679,8 @@ h1, h2, h3, .brand strong {
   .spine-title { max-height:136px; font-size:.77rem; }
   .spine-author { max-height:126px; font-size:.54rem; }
 }
+
+/* v0.0.20 deliberately tucked-away destructive book management */
+.danger-zone{margin:24px 0 6px;border-top:1px solid var(--line);padding-top:14px}
+.danger-zone summary{cursor:pointer;color:var(--muted);font-size:.82rem}
+.danger-zone-inner{margin-top:12px;padding:14px;border:1px solid rgba(150,70,80,.16);border-radius:14px}
