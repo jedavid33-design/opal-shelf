@@ -426,7 +426,7 @@ async function searchBooks(event) {
     
     const compact=rawQuery.replace(/[-\s]/g,"");
     const looksAsin=/^[A-Z0-9]{10}$/i.test(compact) && !/^\d{10}$/.test(compact);
-    target.innerHTML = results.length ? results.map((book,index)=>`<div class="search-result">${book.cover_url?`<img src="${esc(book.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(book.title)}</strong><br><small>${esc(book.authors.join(", "))}${book.source?` · ${esc(book.source)}`:""}</small></span><button class="button small" data-use-result="${index}">Use</button></div>`).join("") : `<p>No catalog results. Manual entry is available${looksAsin?" — the ASIN has been copied into the form.":"."}</p>`;
+    target.innerHTML = results.length ? results.map((book,index)=>`<div class="search-result">${book.cover_url?`<img src="${esc(book.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(book.title)}</strong><br><small>${esc(book.authors.join(", "))}${book.source?` · ${esc(book.source)}`:""}</small></span><button class="button small" data-use-result="${index}">Use</button></div>`).join("") : `<p>${looksAsin?"No free-catalog metadata found for this Kindle edition. The ASIN has been copied into the manual form.":"No free-catalog results. Manual entry is available."}</p>`;
     if(!results.length&&looksAsin&&document.querySelector("#book-form")?.elements.asin)document.querySelector("#book-form").elements.asin.value=compact.toUpperCase();
     target.querySelectorAll("[data-use-result]").forEach((button)=>button.addEventListener("click",()=>{
       const chosen=results[Number(button.dataset.useResult)];
