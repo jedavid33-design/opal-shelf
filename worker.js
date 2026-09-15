@@ -300,7 +300,7 @@ async function handleApi(request, env, url) {
     try {
       const fields = "key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject";
       const olQuery = looksIsbn ? `isbn:${normalized}` : query;
-      const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=12&fields=${fields}`, { headers: { "user-agent": "OpalShelf/0.0.20" } });
+      const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=12&fields=${fields}`, { headers: { "user-agent": "OpalShelf/0.0.21" } });
       if (response.ok) {
         const data = await response.json();
         for (const book of (data.docs || [])) results.push({
@@ -871,7 +871,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.20" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.21" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

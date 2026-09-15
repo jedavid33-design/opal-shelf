@@ -417,11 +417,13 @@ function bindAudioProgress(form,runtime,{percentName="percent",positionName="con
 
 async function searchBooks(event) {
   event.preventDefault();
+    const searchForm=event.currentTarget;
+    const rawQuery=String(searchForm?.querySelector("input")?.value||"").trim();
   const target = document.querySelector("#search-results");
   target.innerHTML = `<p class="subtle">Searching…</p>`;
   try {
     const results = await api(`/api/books/search?q=${encodeURIComponent(event.currentTarget.elements[0].value)}`);
-    const rawQuery=String(event.currentTarget.elements[0].value||"").trim();
+    
     const compact=rawQuery.replace(/[-\s]/g,"");
     const looksAsin=/^[A-Z0-9]{10}$/i.test(compact) && !/^\d{10}$/.test(compact);
     target.innerHTML = results.length ? results.map((book,index)=>`<div class="search-result">${book.cover_url?`<img src="${esc(book.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(book.title)}</strong><br><small>${esc(book.authors.join(", "))}${book.source?` · ${esc(book.source)}`:""}</small></span><button class="button small" data-use-result="${index}">Use</button></div>`).join("") : `<p>No catalog results. Manual entry is available${looksAsin?" — the ASIN has been copied into the form.":"."}</p>`;
