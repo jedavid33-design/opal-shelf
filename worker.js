@@ -306,7 +306,7 @@ async function handleApi(request, env, url) {
     if(looksIsbn){
       try{
         const response=await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(compact)}&jscmd=data&format=json`,{
-          headers:{"user-agent":"OpalShelf/0.0.22 (personal reading tracker)"}
+          headers:{"user-agent":"OpalShelf/0.0.23 (personal reading tracker)"}
         });
         if(response.ok){
           const data=await response.json();
@@ -335,7 +335,7 @@ async function handleApi(request, env, url) {
       const olQuery=looksIsbn?`isbn:${compact}`:query;
       const fields="key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject,editions";
       const response=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=20&fields=${encodeURIComponent(fields)}`,{
-        headers:{"user-agent":"OpalShelf/0.0.22 (personal reading tracker)"}
+        headers:{"user-agent":"OpalShelf/0.0.23 (personal reading tracker)"}
       });
       if(response.ok){
         const data=await response.json();
@@ -936,7 +936,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.22" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.23" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {

@@ -116,6 +116,78 @@ function homeView() {
     ${recentShelf()}`;
 }
 
+
+function compactEstimate(seconds) {
+  const total=Math.max(0,Number(seconds||0));
+  if(!Number.isFinite(total))return "";
+  if(total<60)return "<1m";
+  const minutes=Math.max(1,Math.round(total/60));
+  const hours=Math.floor(minutes/60);
+  const mins=minutes%60;
+  if(hours&&mins)return `${hours}h ${mins}m`;
+  if(hours)return `${hours}h`;
+  return `${mins}m`;
+}
+
+function readThroughPagePace(read) {
+  if(!read || String(read.format||"").toLowerCase()==="audiobook")return null;
+  const sessions=sessionsForRead(read.id).filter(session=>session.ended_at);
+  const timedSeconds=sessions.reduce((sum,session)=>sum+Number(session.duration_seconds||0),0);
+  if(timedSeconds<=0)return null;
+
+  const checkins=state.data.checkins.filter(checkin=>checkin.read_id===read.id);
+  let pages=checkins.reduce((sum,checkin)=>sum+Math.max(0,Number(checkin.pages_read||0)),0);
+
+  if(pages<=0){
+    const start=Number(read.starting_page);
+    const current=Number(read.progress_page);
+    if(Number.isFinite(start)&&Number.isFinite(current)&&current>start)pages=current-start;
+  }
+
+  if(pages<=0)return null;
+  const pagesPerHour=pages/(timedSeconds/3600);
+  return pagesPerHour>0?pagesPerHour:null;
+}
+
+function estimatedTimeRemaining(read,book) {
+  if(!read||!book||read.state==="finished")return null;
+  const format=String(read.format||"").toLowerCase();
+
+  if(format==="audiobook"){
+    const runtime=Number(read.audiobook_runtime_seconds_snapshot??book.audiobook_runtime_seconds??0);
+    const percent=Math.max(0,Math.min(100,Number(read.progress_percent??read.starting_percent??0)));
+    const speed=Math.max(.05,Number(read.listening_speed||1));
+    if(runtime<=0||percent>=100)return null;
+    const contentRemaining=runtime*((100-percent)/100);
+    return {
+      seconds:contentRemaining/speed,
+      detail:`At ${speed}× · ${fmtDuration(contentRemaining)} content remaining`
+    };
+  }
+
+  const totalPages=Number(read.page_count_snapshot??book.page_count??0);
+  const currentPage=Number(read.progress_page);
+  if(totalPages<=0||!Number.isFinite(currentPage)||currentPage>=totalPages)return null;
+
+  const pace=readThroughPagePace(read);
+  if(!pace)return null;
+
+  const pagesRemaining=Math.max(0,totalPages-currentPage);
+  return {
+    seconds:(pagesRemaining/pace)*3600,
+    detail:`Based on ${Math.round(pace)} pg/hr · ${pagesRemaining} page${pagesRemaining===1?"":"s"} remaining`
+  };
+}
+
+function remainingEstimateMarkup(read,book,{detail=false}={}) {
+  const estimate=estimatedTimeRemaining(read,book);
+  if(!estimate)return "";
+  if(detail){
+    return `<div class="remaining-detail"><strong>≈ ${compactEstimate(estimate.seconds)} remaining</strong><small>${esc(estimate.detail)}</small></div>`;
+  }
+  return `<small class="remaining-estimate">≈ ${esc(compactEstimate(estimate.seconds))} remaining</small>`;
+}
+
 function readCard(read) {
   const book = bookById(read.book_id);
   if (!book) return "";
@@ -134,6 +206,7 @@ function readCard(read) {
       <div class="progress-bar" aria-label="${Math.round(pct)} percent complete"><span style="width:${pct}%"></span></div>
       <small>${esc(progressLabel)}</small><br>
       <small>${fmtDuration(todaySeconds(read.id))} today ${isRunning ? `· <span class="timer" data-timer>00:00</span>` : ""}</small>
+      ${remainingEstimateMarkup(read,book)}
     </div>
     <div class="read-actions">
       <button class="button ${isRunning?"danger":"primary"}" data-timer-action="${isRunning?"stop":"start"}" data-read="${read.id}" ${blocked?"disabled":""}>${isRunning?"■ Stop":"▶ Start Reading"}</button>
@@ -823,7 +896,8 @@ function readThroughSummary(read) {
   stats.push([String(readingDates.size),`reading day${readingDates.size===1?"":"s"}`]);
   if(activeDays>0)stats.push([String(activeDays),`active day${activeDays===1?"":"s"}`]);
 
-  return `<section class="read-summary"><p class="eyebrow">Read-through summary</p><div class="read-summary-grid">${stats.map(([value,label])=>`<span><strong>${esc(value)}</strong><small>${esc(label)}</small></span>`).join("")}</div>${activeDays>0?`<p class="subtle">Active days include days you simply didn’t read. Explicit Paused/DNF time is excluded; resuming this read-through starts counting active days again.</p>`:""}</section>`;
+  const book=bookById(read.book_id);
+  return `<section class="read-summary"><p class="eyebrow">Read-through summary</p><div class="read-summary-grid">${stats.map(([value,label])=>`<span><strong>${esc(value)}</strong><small>${esc(label)}</small></span>`).join("")}</div>${remainingEstimateMarkup(read,book,{detail:true})}${activeDays>0?`<p class="subtle">Active days include days you simply didn’t read. Explicit Paused/DNF time is excluded; resuming this read-through starts counting active days again.</p>`:""}</section>`;
 }
 
 function openEditRead(readId) {

@@ -1,22 +1,23 @@
-# Opal Shelf v0.0.22
+# Opal Shelf v0.0.23
 
-Single flat source-of-truth package. Opal Shelf uses free catalog sources only.
+Single flat source-of-truth package. Opal Shelf uses free services only.
 
 ## Install
 1. Deploy `worker.js`.
-2. Confirm `/health` reports `0.0.22`.
+2. Confirm `/health` reports `0.0.23`.
 3. Replace the GitHub repository root files with this ZIP.
 
-No new manual D1 migration is required.
+No D1 migration is required.
 
-## v0.0.22
-- Keeps the catalog stack strictly free: Open Library + Google Books.
-- ISBN searches now try an exact Open Library edition lookup before broad search.
-- Open Library broad search requests edition metadata and checks edition identifiers for exact ISBN / Amazon-ASIN matches when those identifiers exist in the catalog.
-- Exact identifier matches are ranked above approximate title/author results.
-- Richer records (cover/page count/publisher/date) rank above sparse duplicates.
-- Google Books remains the free secondary catalog and exact ISBN matches are identified/ranked.
-- ASINs are preserved even when the Kindle edition is absent from both free catalogs.
-- Empty ASIN searches now explain that no free-catalog metadata was found and keep the ASIN in manual entry.
-- No paid APIs, subscriptions, affiliate APIs, or credentials are introduced.
-- Preserves v0.0.21 Safari search fix, v0.0.20 ASIN storage/delete controls, and all prior reading/session/shelf behavior.
+## v0.0.23
+- Adds **Estimated time remaining** to Current Reads.
+- Print/ebook estimates use that read-through's own measured average pages/hour.
+- Audiobook estimates use content remaining divided by the read-through's current listening speed.
+- The estimate is hidden until Shelf has enough real data to calculate it responsibly.
+- Read-through detail/summary includes the estimate plus its basis:
+  - `Based on 47 pg/hr`
+  - or `At 1.75×`
+- Estimates are deliberately displayed at minute-level precision because they are forecasts, not recorded session time.
+- Preserves v0.0.22 free catalog lookup, ASIN support, hidden permanent Delete Book, page ↔ percent synchronization, session tools, read-through summaries, and Opal styling.
+
+No ratings.
