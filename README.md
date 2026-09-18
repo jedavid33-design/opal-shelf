@@ -1,23 +1,21 @@
-# Opal Shelf v0.0.23
+# Opal Shelf v0.0.24
 
-Single flat source-of-truth package. Opal Shelf uses free services only.
+Single flat source-of-truth package.
 
 ## Install
 1. Deploy `worker.js`.
-2. Confirm `/health` reports `0.0.23`.
-3. Replace the GitHub repository root files with this ZIP.
+2. Confirm `/health` reports `0.0.24`.
+3. GitHub repository files are the source of truth.
 
 No D1 migration is required.
 
-## v0.0.23
-- Adds **Estimated time remaining** to Current Reads.
-- Print/ebook estimates use that read-through's own measured average pages/hour.
-- Audiobook estimates use content remaining divided by the read-through's current listening speed.
-- The estimate is hidden until Shelf has enough real data to calculate it responsibly.
-- Read-through detail/summary includes the estimate plus its basis:
-  - `Based on 47 pg/hr`
-  - or `At 1.75×`
-- Estimates are deliberately displayed at minute-level precision because they are forecasts, not recorded session time.
-- Preserves v0.0.22 free catalog lookup, ASIN support, hidden permanent Delete Book, page ↔ percent synchronization, session tools, read-through summaries, and Opal styling.
+## v0.0.24
+- Fixes the **first-open / previous-day reading reconciliation popup** for ebooks.
+- The popup now uses the same live page ↔ percent calculation already working in Update Progress.
+- Entering percent immediately calculates page when the read-through/book has a page total.
+- Entering page immediately calculates percent.
+- The most recently edited field drives the paired value.
+- Print/other page-based reads also get percent crossover when a page total exists.
+- Preserves v0.0.23 estimated time remaining and all prior behavior.
 
 No ratings.
