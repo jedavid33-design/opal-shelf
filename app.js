@@ -934,17 +934,44 @@ function showNextCheckin(){
   const item=state.pendingCheckins[0];
   if(!item)return;
   const runtime=Number(item.audiobook_runtime_seconds_snapshot??item.audiobook_runtime_seconds??0);
+  const pageTotal=Number(item.page_count_snapshot||item.page_count||0);
   let fields;
-  if(item.format==="print"||item.format==="other")fields=field("Where did you finish? Page","page",item.progress_page,"number");
-  else if(item.format==="ebook")fields=`${field("Page (optional)","page",item.progress_page,"number")}${field("Progress percent (optional)","percent",item.progress_percent,"number")}`;
-  else fields=`${field("Current progress","percent",item.progress_percent??0,"number")}${runtime?field("Content position (h:mm)","content_position",formatAudioPosition(runtime*Number(item.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",item.listening_speed||1,"number")}`;
+
+  if(item.format==="print"||item.format==="other") {
+    fields=pageTotal
+      ? `${field("Where did you finish? Page","page",item.progress_page,"number")}${field("Progress percent","percent",item.progress_percent??(Number(item.progress_page||0)/pageTotal*100),"number")}`
+      : field("Where did you finish? Page","page",item.progress_page,"number");
+  } else if(item.format==="ebook") {
+    fields=`${field("Page","page",item.progress_page,"number")}${field("Progress percent","percent",item.progress_percent??(pageTotal?Number(item.progress_page||0)/pageTotal*100:""),"number")}`;
+  } else {
+    fields=`${field("Current progress","percent",item.progress_percent??0,"number")}${runtime?field("Content position (h:mm)","content_position",formatAudioPosition(runtime*Number(item.progress_percent||0)/100)):""}${field("Listening speed","listening_speed",item.listening_speed||1,"number")}`;
+  }
+
   const reconciliationLabel=item.session_date===addDateKey(dateKey(),-1)?"Yesterday’s Reading":`Reading on ${fmtDate(item.session_date)}`;
   document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">${esc(reconciliationLabel)}</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><p class="subtle">This progress will be saved to <strong>${esc(fmtDate(item.session_date))}</strong>.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;
   checkinDialog.showModal();
+
   const form=document.querySelector("#checkin-form");
   if(item.format==="audiobook"&&runtime)bindAudioProgress(form,runtime,{breakdownId:"unused-checkin-breakdown"});
+
+  // The first-open reconciliation popup now uses the same live page ↔ percent
+  // calculation as Update Progress. Most recently edited field drives the other.
+  if(item.format!=="audiobook"&&pageTotal)bindPageProgress(form,pageTotal);
+
   document.querySelector("#checkin-later").addEventListener("click",()=>checkinDialog.close());
-  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));Object.assign(data,{read_id:item.read_id,session_date:item.session_date});try{await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});state.pendingCheckins.shift();checkinDialog.close();await refresh();if(state.pendingCheckins.length)showNextCheckin();toast(`Progress saved to ${fmtDate(item.session_date)}`);}catch(error){toast(error.message);}});
+  form.addEventListener("submit",async(event)=>{
+    event.preventDefault();
+    const data=Object.fromEntries(new FormData(event.currentTarget));
+    Object.assign(data,{read_id:item.read_id,session_date:item.session_date});
+    try{
+      await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});
+      state.pendingCheckins.shift();
+      checkinDialog.close();
+      await refresh();
+      if(state.pendingCheckins.length)showNextCheckin();
+      toast(`Progress saved to ${fmtDate(item.session_date)}`);
+    }catch(error){toast(error.message);}
+  });
 }
 
 function formDialogContent(html){document.querySelector("#form-dialog-content").innerHTML=html;formDialog.showModal();document.querySelectorAll("#form-dialog-content [data-close]").forEach((el)=>el.addEventListener("click",()=>formDialog.close()));}
