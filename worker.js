@@ -254,13 +254,13 @@ async function bootstrap(db, url) {
 
 async function pendingCheckins(db, date) {
   await ensureReadStatePeriods(db);
-  const yesterday = new Date(\`\${date}T00:00:00Z\`);
+  const yesterday = new Date(`${date}T00:00:00Z`);
   yesterday.setUTCDate(yesterday.getUTCDate()-1);
   const yesterdayKey=yesterday.toISOString().slice(0,10);
 
   // Always reconcile every read-through that was active yesterday, even if the
   // timer was never started. Older unreconciled timed sessions are retained too.
-  return all(db, \`
+  return all(db, `
     WITH candidates AS (
       SELECT DISTINCT rt.id AS read_id, rt.book_id, ? AS session_date
       FROM read_throughs rt
@@ -286,7 +286,7 @@ async function pendingCheckins(db, date) {
     WHERE dc.id IS NULL
     GROUP BY c.read_id,c.book_id,c.session_date
     ORDER BY c.session_date,b.title COLLATE NOCASE
-  \`, yesterdayKey,yesterdayKey,yesterdayKey,date);
+  `, yesterdayKey,yesterdayKey,yesterdayKey,date);
 }
 
 
