@@ -468,12 +468,12 @@ function normalizeImportedBook(raw){
 }
 
 function openBookImport(){
-  formDialogContent(\`<button class="modal-close" data-close aria-label="Close">×</button>
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button>
     <p class="eyebrow">Bulk add to Want to Read</p><h1>Import Books</h1>
     <p>Upload an Opal Shelf JSON file made from a book-chat thread. Nothing is added until you review the preview.</p>
     <p class="subtle">Expected format: <code>{"format":"opal-shelf-import","version":1,"books":[...]}</code>. Existing books are skipped automatically.</p>
     <div class="field"><label for="opal-import-file">Import file</label><input id="opal-import-file" type="file" accept=".json,application/json"></div>
-    <div id="import-preview"></div>\`);
+    <div id="import-preview"></div>`);
   document.querySelector("#opal-import-file").addEventListener("change",previewBookImport);
 }
 
@@ -486,9 +486,9 @@ async function previewBookImport(event){
     const books=payload.books.map(normalizeImportedBook).filter(book=>book.title);
     if(!books.length)throw new Error("The import contains no books.");
     const rows=books.map((book,index)=>({book,index,duplicate:importDuplicate(book)}));
-    target.innerHTML=\`<div class="panel"><p><strong>\${books.length} book\${books.length===1?"":"s"} found</strong> · \${rows.filter(row=>row.duplicate).length} already in Shelf</p>
-      <div class="history-list">\${rows.map(row=>\`<label class="history-item checkbox"><input type="checkbox" data-import-index="\${row.index}" \${row.duplicate?"disabled":"checked"}><span><strong>\${esc(row.book.title)}</strong><br><small>\${esc(row.book.authors.join(", ")||"Unknown author")}\${row.duplicate?" · Already in Shelf":" · Want to Read"}</small></span></label>\`).join("")}</div>
-      <div class="form-actions"><button type="button" class="button primary" id="commit-import">Add Selected Books</button></div></div>\`;
+    target.innerHTML=`<div class="panel"><p><strong>${books.length} book${books.length===1?"":"s"} found</strong> · ${rows.filter(row=>row.duplicate).length} already in Shelf</p>
+      <div class="history-list">${rows.map(row=>`<label class="history-item checkbox"><input type="checkbox" data-import-index="${row.index}" ${row.duplicate?"disabled":"checked"}><span><strong>${esc(row.book.title)}</strong><br><small>${esc(row.book.authors.join(", ")||"Unknown author")}${row.duplicate?" · Already in Shelf":" · Want to Read"}</small></span></label>`).join("")}</div>
+      <div class="form-actions"><button type="button" class="button primary" id="commit-import">Add Selected Books</button></div></div>`;
     document.querySelector("#commit-import").addEventListener("click",async()=>{
       const selected=[...target.querySelectorAll("[data-import-index]:checked")].map(input=>books[Number(input.dataset.importIndex)]);
       if(!selected.length){toast("No new books selected");return;}
@@ -499,10 +499,10 @@ async function previewBookImport(event){
           await api("/api/books",{method:"POST",body:JSON.stringify({...book,authors:book.authors.join(", "),genres:book.genres.join(", "),narrators:book.narrators.join(", "),personal_tags:book.personal_tags.join(", "),status:"want"})});
           added++;
         }
-        formDialog.close();await refresh();toast(\`\${added} book\${added===1?"":"s"} added to Want to Read\`);
-      }catch(error){button.disabled=false;button.textContent="Add Selected Books";toast(\`Imported \${added}; \${error.message}\`);}
+        formDialog.close();await refresh();toast(`${added} book${added===1?"":"s"} added to Want to Read`);
+      }catch(error){button.disabled=false;button.textContent="Add Selected Books";toast(`Imported ${added}; ${error.message}`);}
     });
-  }catch(error){target.innerHTML=\`<p class="error-banner">\${esc(error.message)}</p>\`;}
+  }catch(error){target.innerHTML=`<p class="error-banner">${esc(error.message)}</p>`;}
 }
 
 function openAddBook(prefill = {}) {
