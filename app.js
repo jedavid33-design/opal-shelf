@@ -325,7 +325,7 @@ function shelfView() {
   const finished = visible.filter((book)=>book.status==="finished");
   const custom = state.data.shelves.map((shelf)=>[shelf.name, visible.filter((book)=>state.data.memberships.some((m)=>m.shelf_id===shelf.id&&m.book_id===book.id)),shelf]);
 
-  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">Current reads stay face-out. Want to Read and Finished live on the shelf as spines — tap one to pull it out and see the front.</p></div><button class="button" id="new-shelf">＋ New Shelf</button></div>
+  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">Current reads stay face-out. Want to Read and Finished live on the shelf as spines — tap one to pull it out and see the front.</p></div><div class="form-actions"><button class="button" id="import-books">⇩ Import Books</button><button class="button" id="new-shelf">＋ New Shelf</button></div></div>
     ${reading.length ? bookshelf("Reading",reading) : ""}
     ${want.length ? spineBookshelf("Want to Read",want,"want") : ""}
     ${finished.length ? spineBookshelf("Finished Reading",finished,"finished") : ""}
@@ -399,6 +399,7 @@ function bindView() {
   app.querySelectorAll("[data-finish-read]").forEach((el)=>el.addEventListener("click",()=>finishReadFromCard(el.dataset.finishRead)));
   app.querySelectorAll("[data-timer-action]").forEach((el)=>el.addEventListener("click",()=>timerAction(el.dataset.timerAction,el.dataset.read,{focusReadId:el.dataset.read})));
   document.querySelector("#new-shelf")?.addEventListener("click",()=>shelfForm());
+  document.querySelector("#import-books")?.addEventListener("click",openBookImport);
   app.querySelectorAll("[data-rename-shelf]").forEach((el)=>el.addEventListener("click",()=>shelfForm(el.dataset.renameShelf)));
   app.querySelectorAll("[data-delete-shelf]").forEach((el)=>el.addEventListener("click",()=>deleteShelf(el.dataset.deleteShelf)));
   document.querySelector("#daily-goal-form")?.addEventListener("submit",saveDailyGoal);
@@ -419,6 +420,89 @@ async function timerAction(action,readId,refreshOptions={}) {
     await refresh(refreshOptions);
     toast(action === "start" ? "Reading timer started" : "Session saved");
   } catch (error) { toast(error.message); }
+}
+
+
+function normalizeImportAuthors(value){
+  if(Array.isArray(value))return value.map(String).map(v=>v.trim()).filter(Boolean);
+  return String(value||"").split(",").map(v=>v.trim()).filter(Boolean);
+}
+
+function importDuplicate(book){
+  const isbn=String(book.isbn||"").replace(/[-\s]/g,"");
+  const asin=String(book.asin||"").trim().toUpperCase();
+  const title=String(book.title||"").trim().toLowerCase();
+  const authorKey=normalizeImportAuthors(book.authors).join("|").toLowerCase();
+  return state.data.books.find(existing=>{
+    const existingIsbn=String(existing.isbn||"").replace(/[-\s]/g,"");
+    const existingAsin=String(existing.asin||"").trim().toUpperCase();
+    const existingTitle=String(existing.title||"").trim().toLowerCase();
+    const existingAuthors=(existing.authors||[]).join("|").toLowerCase();
+    return (isbn&&existingIsbn===isbn)||(asin&&existingAsin===asin)||(title&&existingTitle===title&&(!authorKey||existingAuthors===authorKey));
+  });
+}
+
+function normalizeImportedBook(raw){
+  return {
+    title:String(raw?.title||"").trim(),
+    subtitle:String(raw?.subtitle||"").trim(),
+    authors:normalizeImportAuthors(raw?.authors||raw?.author),
+    cover_url:String(raw?.cover_url||"").trim(),
+    series_name:String(raw?.series_name||raw?.series||"").trim(),
+    series_number:raw?.series_number??"",
+    description:String(raw?.description||"").trim(),
+    genres:Array.isArray(raw?.genres)?raw.genres:[],
+    format_metadata:String(raw?.format_metadata||"").trim(),
+    isbn:String(raw?.isbn||"").trim(),
+    asin:String(raw?.asin||"").trim().toUpperCase(),
+    publisher:String(raw?.publisher||"").trim(),
+    publication_date:String(raw?.publication_date||"").trim(),
+    page_count:raw?.page_count??"",
+    audiobook_runtime_seconds:raw?.audiobook_runtime_seconds??0,
+    narrators:Array.isArray(raw?.narrators)?raw.narrators:[],
+    language:String(raw?.language||"").trim(),
+    personal_tags:Array.isArray(raw?.personal_tags)?raw.personal_tags:[],
+    favorite:Boolean(raw?.favorite),
+    status:["want","reading","finished","dnf"].includes(raw?.status)?raw.status:"want"
+  };
+}
+
+function openBookImport(){
+  formDialogContent(\`<button class="modal-close" data-close aria-label="Close">×</button>
+    <p class="eyebrow">Bulk add to Want to Read</p><h1>Import Books</h1>
+    <p>Upload an Opal Shelf JSON file made from a book-chat thread. Nothing is added until you review the preview.</p>
+    <p class="subtle">Expected format: <code>{"format":"opal-shelf-import","version":1,"books":[...]}</code>. Existing books are skipped automatically.</p>
+    <div class="field"><label for="opal-import-file">Import file</label><input id="opal-import-file" type="file" accept=".json,application/json"></div>
+    <div id="import-preview"></div>\`);
+  document.querySelector("#opal-import-file").addEventListener("change",previewBookImport);
+}
+
+async function previewBookImport(event){
+  const file=event.currentTarget.files?.[0], target=document.querySelector("#import-preview");
+  if(!file)return;
+  try{
+    const payload=JSON.parse(await file.text());
+    if(payload?.format!=="opal-shelf-import"||Number(payload?.version)!==1||!Array.isArray(payload?.books))throw new Error("This is not an Opal Shelf import v1 file.");
+    const books=payload.books.map(normalizeImportedBook).filter(book=>book.title);
+    if(!books.length)throw new Error("The import contains no books.");
+    const rows=books.map((book,index)=>({book,index,duplicate:importDuplicate(book)}));
+    target.innerHTML=\`<div class="panel"><p><strong>\${books.length} book\${books.length===1?"":"s"} found</strong> · \${rows.filter(row=>row.duplicate).length} already in Shelf</p>
+      <div class="history-list">\${rows.map(row=>\`<label class="history-item checkbox"><input type="checkbox" data-import-index="\${row.index}" \${row.duplicate?"disabled":"checked"}><span><strong>\${esc(row.book.title)}</strong><br><small>\${esc(row.book.authors.join(", ")||"Unknown author")}\${row.duplicate?" · Already in Shelf":" · Want to Read"}</small></span></label>\`).join("")}</div>
+      <div class="form-actions"><button type="button" class="button primary" id="commit-import">Add Selected Books</button></div></div>\`;
+    document.querySelector("#commit-import").addEventListener("click",async()=>{
+      const selected=[...target.querySelectorAll("[data-import-index]:checked")].map(input=>books[Number(input.dataset.importIndex)]);
+      if(!selected.length){toast("No new books selected");return;}
+      const button=document.querySelector("#commit-import");button.disabled=true;button.textContent="Importing…";
+      let added=0;
+      try{
+        for(const book of selected){
+          await api("/api/books",{method:"POST",body:JSON.stringify({...book,authors:book.authors.join(", "),genres:book.genres.join(", "),narrators:book.narrators.join(", "),personal_tags:book.personal_tags.join(", "),status:"want"})});
+          added++;
+        }
+        formDialog.close();await refresh();toast(\`\${added} book\${added===1?"":"s"} added to Want to Read\`);
+      }catch(error){button.disabled=false;button.textContent="Add Selected Books";toast(\`Imported \${added}; \${error.message}\`);}
+    });
+  }catch(error){target.innerHTML=\`<p class="error-banner">\${esc(error.message)}</p>\`;}
 }
 
 function openAddBook(prefill = {}) {
@@ -948,7 +1032,10 @@ function showNextCheckin(){
   }
 
   const reconciliationLabel=item.session_date===addDateKey(dateKey(),-1)?"Yesterday’s Reading":`Reading on ${fmtDate(item.session_date)}`;
-  document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">${esc(reconciliationLabel)}</p><h1>${esc(item.title)}</h1><p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} session${item.session_count===1?"":"s"}.</p><p class="subtle">This progress will be saved to <strong>${esc(fmtDate(item.session_date))}</strong>.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button><button class="button primary">Save</button></div></form>`;
+  const activityLine=Number(item.session_count)>0
+    ? `<p>You ${item.format==="audiobook"?"listened":"read"} for <strong>${fmtDuration(item.duration_seconds)}</strong> across ${item.session_count} timed session${item.session_count===1?"":"s"}.</p>`
+    : `<p>Shelf has no timed session for this book yesterday. Did you read it?</p>`;
+  document.querySelector("#checkin-dialog-content").innerHTML=`<p class="eyebrow">${esc(reconciliationLabel)}</p><h1>${esc(item.title)}</h1>${activityLine}<p class="subtle">This progress will be saved to <strong>${esc(fmtDate(item.session_date))}</strong>.</p><form id="checkin-form"><div class="form-grid">${fields}</div><div class="form-actions"><button type="button" class="button" id="checkin-later">Later</button>${Number(item.session_count)===0?'<button type="button" class="button" id="checkin-no-read">Didn’t read</button><button type="button" class="button" id="checkin-add-session">I read, but didn’t time it</button>':""}<button class="button primary">Save Progress</button></div></form>`;
   checkinDialog.showModal();
 
   const form=document.querySelector("#checkin-form");
@@ -959,6 +1046,20 @@ function showNextCheckin(){
   if(item.format!=="audiobook"&&pageTotal)bindPageProgress(form,pageTotal);
 
   document.querySelector("#checkin-later").addEventListener("click",()=>checkinDialog.close());
+  document.querySelector("#checkin-no-read")?.addEventListener("click",async()=>{
+    try{
+      await api("/api/checkins",{method:"POST",body:JSON.stringify({read_id:item.read_id,session_date:item.session_date,page:item.progress_page??"",percent:item.progress_percent??"",listening_speed:item.listening_speed||1})});
+      state.pendingCheckins.shift();checkinDialog.close();await refresh();
+      if(state.pendingCheckins.length)showNextCheckin();
+      toast("Marked as no reading yesterday");
+    }catch(error){toast(error.message);}
+  });
+  document.querySelector("#checkin-add-session")?.addEventListener("click",()=>{
+    checkinDialog.close();
+    openAddSession(item.read_id,{returnReadId:null,returnBookId:null});
+    const sessionForm=document.querySelector("#add-session-form");
+    if(sessionForm?.elements.local_date)sessionForm.elements.local_date.value=item.session_date;
+  });
   form.addEventListener("submit",async(event)=>{
     event.preventDefault();
     const data=Object.fromEntries(new FormData(event.currentTarget));
