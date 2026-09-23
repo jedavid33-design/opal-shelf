@@ -253,20 +253,40 @@ async function bootstrap(db, url) {
 }
 
 async function pendingCheckins(db, date) {
-  return all(db, `
-    SELECT rs.read_id, rs.book_id, rs.local_date AS session_date,
-      COUNT(*) AS session_count, SUM(rs.duration_seconds) AS duration_seconds,
-      b.title, b.audiobook_runtime_seconds, rt.format, rt.progress_page, rt.progress_percent,
-      rt.listening_speed, rt.audiobook_runtime_seconds_snapshot
-    FROM reading_sessions rs
-    JOIN books b ON b.id = rs.book_id
-    JOIN read_throughs rt ON rt.id = rs.read_id
-    LEFT JOIN daily_checkins dc ON dc.read_id = rs.read_id AND dc.session_date = rs.local_date
-    WHERE rs.local_date < ? AND rs.ended_at IS NOT NULL AND dc.id IS NULL
-      AND rt.state = 'active'
-    GROUP BY rs.read_id, rs.book_id, rs.local_date
-    ORDER BY rs.local_date, MIN(rs.started_at)
-  `, date);
+  await ensureReadStatePeriods(db);
+  const yesterday = new Date(\`\${date}T00:00:00Z\`);
+  yesterday.setUTCDate(yesterday.getUTCDate()-1);
+  const yesterdayKey=yesterday.toISOString().slice(0,10);
+
+  // Always reconcile every read-through that was active yesterday, even if the
+  // timer was never started. Older unreconciled timed sessions are retained too.
+  return all(db, \`
+    WITH candidates AS (
+      SELECT DISTINCT rt.id AS read_id, rt.book_id, ? AS session_date
+      FROM read_throughs rt
+      JOIN read_state_periods rsp ON rsp.read_id=rt.id
+      WHERE rsp.state='active'
+        AND rsp.started_date<=?
+        AND (rsp.ended_date IS NULL OR rsp.ended_date>=?)
+      UNION
+      SELECT DISTINCT rs.read_id, rs.book_id, rs.local_date AS session_date
+      FROM reading_sessions rs
+      WHERE rs.local_date<? AND rs.ended_at IS NOT NULL
+    )
+    SELECT c.read_id,c.book_id,c.session_date,
+      COUNT(rs.id) AS session_count,COALESCE(SUM(rs.duration_seconds),0) AS duration_seconds,
+      b.title,b.page_count,b.audiobook_runtime_seconds,
+      rt.format,rt.progress_page,rt.progress_percent,rt.listening_speed,
+      rt.page_count_snapshot,rt.audiobook_runtime_seconds_snapshot
+    FROM candidates c
+    JOIN books b ON b.id=c.book_id
+    JOIN read_throughs rt ON rt.id=c.read_id
+    LEFT JOIN reading_sessions rs ON rs.read_id=c.read_id AND rs.local_date=c.session_date AND rs.ended_at IS NOT NULL
+    LEFT JOIN daily_checkins dc ON dc.read_id=c.read_id AND dc.session_date=c.session_date
+    WHERE dc.id IS NULL
+    GROUP BY c.read_id,c.book_id,c.session_date
+    ORDER BY c.session_date,b.title COLLATE NOCASE
+  \`, yesterdayKey,yesterdayKey,yesterdayKey,date);
 }
 
 
@@ -306,7 +326,7 @@ async function handleApi(request, env, url) {
     if(looksIsbn){
       try{
         const response=await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(compact)}&jscmd=data&format=json`,{
-          headers:{"user-agent":"OpalShelf/0.0.24 (personal reading tracker)"}
+          headers:{"user-agent":"OpalShelf/0.0.25 (personal reading tracker)"}
         });
         if(response.ok){
           const data=await response.json();
@@ -335,7 +355,7 @@ async function handleApi(request, env, url) {
       const olQuery=looksIsbn?`isbn:${compact}`:query;
       const fields="key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject,editions";
       const response=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=20&fields=${encodeURIComponent(fields)}`,{
-        headers:{"user-agent":"OpalShelf/0.0.24 (personal reading tracker)"}
+        headers:{"user-agent":"OpalShelf/0.0.25 (personal reading tracker)"}
       });
       if(response.ok){
         const data=await response.json();
@@ -936,7 +956,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.24" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.25" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
