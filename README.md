@@ -1,21 +1,20 @@
-# Opal Shelf v0.0.24
+# Opal Shelf v0.0.25
 
-Single flat source-of-truth package.
+GitHub root files are the source of truth. Opal Shelf uses free services only.
 
 ## Install
 1. Deploy `worker.js`.
-2. Confirm `/health` reports `0.0.24`.
-3. GitHub repository files are the source of truth.
+2. Confirm `/health` reports `0.0.25`.
+3. No D1 migration is required.
 
-No D1 migration is required.
+## v0.0.25
+- First-open daily reconciliation asks about every read-through that was active yesterday, including books with no timed session.
+- Untimed books offer **Didn’t read** and **I read, but didn’t time it**.
+- Forgotten reading can open Add Session with yesterday’s date.
+- Adds **Opal Shelf Import v1** under Shelf → Import Books.
+- Import JSON is previewed before anything is added.
+- Existing books are skipped using ISBN, ASIN, or title+author matching.
+- Selected imports go to Want to Read.
+- Preserves v0.0.24 page ↔ percent reconciliation and v0.0.23 estimated time remaining.
 
-## v0.0.24
-- Fixes the **first-open / previous-day reading reconciliation popup** for ebooks.
-- The popup now uses the same live page ↔ percent calculation already working in Update Progress.
-- Entering percent immediately calculates page when the read-through/book has a page total.
-- Entering page immediately calculates percent.
-- The most recently edited field drives the paired value.
-- Print/other page-based reads also get percent crossover when a page total exists.
-- Preserves v0.0.23 estimated time remaining and all prior behavior.
-
-No ratings.
+See `PROJECT_CONTEXT.md` for the durable project handoff.
