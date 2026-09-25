@@ -260,6 +260,8 @@ async function pendingCheckins(db, date) {
 
   // Always reconcile every read-through that was active yesterday, even if the
   // timer was never started. Older unreconciled timed sessions are retained too.
+  // Finished and DNF read-throughs are never asked about: the reconciliation
+  // is only for currently-reading books.
   return all(db, `
     WITH candidates AS (
       SELECT DISTINCT rt.id AS read_id, rt.book_id, ? AS session_date
@@ -273,10 +275,7 @@ async function pendingCheckins(db, date) {
       FROM reading_sessions rs
       JOIN read_throughs historical_rt ON historical_rt.id=rs.read_id
       WHERE rs.local_date<? AND rs.ended_at IS NOT NULL
-        AND (
-          historical_rt.state IN ('active','paused')
-          OR (historical_rt.finish_date IS NOT NULL AND rs.local_date<historical_rt.finish_date)
-        )
+        AND historical_rt.state IN ('active','paused')
     )
     SELECT c.read_id,c.book_id,c.session_date,
       COUNT(rs.id) AS session_count,COALESCE(SUM(rs.duration_seconds),0) AS duration_seconds,
@@ -289,10 +288,7 @@ async function pendingCheckins(db, date) {
     LEFT JOIN reading_sessions rs ON rs.read_id=c.read_id AND rs.local_date=c.session_date AND rs.ended_at IS NOT NULL
     LEFT JOIN daily_checkins dc ON dc.read_id=c.read_id AND dc.session_date=c.session_date
     WHERE dc.id IS NULL
-      AND (
-        rt.state IN ('active','paused')
-        OR (rt.finish_date IS NOT NULL AND c.session_date<rt.finish_date)
-      )
+      AND rt.state IN ('active','paused')
     GROUP BY c.read_id,c.book_id,c.session_date
     ORDER BY c.session_date,b.title COLLATE NOCASE
   `, yesterdayKey,yesterdayKey,yesterdayKey,date);
