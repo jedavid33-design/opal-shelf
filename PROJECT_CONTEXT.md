@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.25
+- Version: 0.0.26
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -37,6 +37,15 @@
   - ebook/physical: based on measured pages/hour for that read-through.
   - audiobook: remaining content divided by current playback speed.
   - hidden when there is not enough data.
+
+## v0.0.26
+1. Fixed: first-open daily reconciliation no longer asks about finished or DNF
+   books. `pendingCheckins` in worker.js now only returns read-throughs with
+   state `active`/`paused` (previously the `finish_date` allowance let a book
+   finished today keep prompting about yesterday on every app refocus, and old
+   unreconciled sessions on finished books were retained forever).
+2. `completeRead` in app.js now drops the just-finished/DNF read from the
+   already-loaded checkin queue so it can't pop up later in the same session.
 
 ## v0.0.25
 1. Daily reconciliation now asks about every read-through that was active yesterday, not only books with timed sessions.
