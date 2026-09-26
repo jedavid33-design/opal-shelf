@@ -523,9 +523,10 @@ async function handleApi(request, env, url) {
       ),
       db.prepare("UPDATE books SET status='reading',book_dnf=0,updated_at=? WHERE id=?").bind(timestamp,input.book_id)
     ]);
-    await ensureReadStatePeriods(db);
-    await db.prepare("INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at) VALUES (?,?,?,?,?,?)")
-      .bind(id("state"),readId,"active",input.start_date||input.local_date,null,timestamp).run();
+    // recordReadStateChange is idempotent: the backfill inside it creates the
+    // single opening "active" period, and the explicit same-state insert that
+    // used to follow it double-counted active days. Do not add another insert.
+    await recordReadStateChange(db, { id: readId }, "active", input.start_date || input.local_date);
     return json(await first(db, "SELECT * FROM read_throughs WHERE id=?", readId), 201);
   }
 
@@ -869,6 +870,28 @@ async function handleApi(request, env, url) {
     const timestamp = now();
     const speed = input.listening_speed ?? read.listening_speed;
 
+    // Mirror the Update Progress inference: when an audiobook check-in advances
+    // the percent, that advance represents listening time on the reconciled day,
+    // so record it as a session. Timer sessions already logged that day cover
+    // part of the advance and are subtracted; re-saving the same check-in
+    // advances nothing, so no duplicate session can be created.
+    let inferredSeconds = 0;
+    if (read.format === "audiobook" && Number.isFinite(newPercent)) {
+      const oldPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
+      const deltaPercent = newPercent - oldPercent;
+      if (deltaPercent > 0) {
+        const bookRuntime = await first(db, "SELECT audiobook_runtime_seconds FROM books WHERE id=?", read.book_id);
+        const runtime = Number(read.audiobook_runtime_seconds_snapshot || bookRuntime?.audiobook_runtime_seconds || 0);
+        if (runtime > 0) {
+          const safeSpeed = Math.max(0.05, Number(speed || 1));
+          const expectedSeconds = Math.max(1, Math.round(runtime * (deltaPercent / 100) / safeSpeed));
+          const daySessions = await all(db, `SELECT duration_seconds FROM reading_sessions WHERE read_id=? AND local_date=? AND ended_at IS NOT NULL`, read.id, sessionDate);
+          const coveredSeconds = daySessions.reduce((sum, session) => sum + Math.max(0, Number(session.duration_seconds || 0)), 0);
+          inferredSeconds = Math.max(0, expectedSeconds - coveredSeconds);
+        }
+      }
+    }
+
     await db.prepare(`INSERT INTO daily_checkins
       (id,read_id,book_id,session_date,previous_page,new_page,previous_percent,new_percent,pages_read,listening_speed,reconciled_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)
@@ -897,6 +920,15 @@ async function handleApi(request, env, url) {
     await db.prepare("UPDATE read_throughs SET progress_page=?,progress_percent=?,listening_speed=?,updated_at=? WHERE id=?")
       .bind(livePage,livePercent,Number(input.listening_speed || read.listening_speed || 1),timestamp,read.id).run();
 
+    if (inferredSeconds > 0) {
+      // Anchor the inferred interval at midday of the reconciled date; the exact
+      // clock time is unknown, but local_date is what every view groups by.
+      const endedAt = new Date(`${sessionDate}T12:00:00Z`);
+      const startedAt = new Date(endedAt.getTime() - inferredSeconds * 1000);
+      await db.prepare(`INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+        .bind(id("session"),read.id,read.book_id,sessionDate,startedAt.toISOString(),endedAt.toISOString(),inferredSeconds,Math.max(0.05, Number(speed || 1)),timestamp).run();
+    }
+
     return json({
       ok:true,
       session_date:sessionDate,
@@ -904,7 +936,8 @@ async function handleApi(request, env, url) {
       new_page:newPage,
       pages_read:pagesRead,
       previous_percent:previousPercent,
-      new_percent:newPercent
+      new_percent:newPercent,
+      inferred_duration_seconds:inferredSeconds
     });
   }
 
@@ -961,7 +994,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.26" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.27" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
