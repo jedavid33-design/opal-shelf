@@ -1065,12 +1065,12 @@ function showNextCheckin(){
     const data=Object.fromEntries(new FormData(event.currentTarget));
     Object.assign(data,{read_id:item.read_id,session_date:item.session_date});
     try{
-      await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});
+      const result=await api("/api/checkins",{method:"POST",body:JSON.stringify(data)});
       state.pendingCheckins.shift();
       checkinDialog.close();
       await refresh();
       if(state.pendingCheckins.length)showNextCheckin();
-      toast(`Progress saved to ${fmtDate(item.session_date)}`);
+      toast(result.inferred_duration_seconds?`Progress saved to ${fmtDate(item.session_date)} · ${fmtDuration(result.inferred_duration_seconds)} listening added`:`Progress saved to ${fmtDate(item.session_date)}`);
     }catch(error){toast(error.message);}
   });
 }
