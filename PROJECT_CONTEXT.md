@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.26
+- Version: 0.0.27
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -37,6 +37,23 @@
   - ebook/physical: based on measured pages/hour for that read-through.
   - audiobook: remaining content divided by current playback speed.
   - hidden when there is not enough data.
+
+## v0.0.27
+1. Fixed: the first-open daily reconciliation ("Yesterday's Reading") now records
+   an inferred listening session for audiobooks when the reconciled percent
+   advances, mirroring the Update Progress endpoint. The session is dated to the
+   reconciled day (midday-anchored; exact clock time unknown) with duration =
+   content-delta / listening speed, minus timer sessions already logged that day.
+   Re-saving the same check-in advances nothing, so no duplicate session is
+   created. The save toast now reports the inferred listening time, e.g.
+   "Progress saved to Sep 25 · 13m listening added". Previously a check-in saved
+   position only, so Sessions stayed 0 and "reading days" never counted
+   audiobook check-ins.
+2. Fixed: creating a read-through inserted TWO identical "active" state periods
+   (the backfill in ensureReadStatePeriods plus an unconditional INSERT),
+   doubling active-day counts (e.g. a book added yesterday showed 4 active days).
+   Creation now goes through the idempotent recordReadStateChange; existing
+   duplicate periods were removed from D1.
 
 ## v0.0.26
 1. Fixed: first-open daily reconciliation no longer asks about finished or DNF
