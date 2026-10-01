@@ -8,11 +8,21 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.27
+- Version: 0.0.28
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
 - Strict rule: no paid catalog/API services.
+
+## v0.0.28 — full session-integrity audit fixes (2026-10-01)
+All 5 major + 10 minor findings from `~/workspace/site-audits/opal-shelf-AUDIT-2026-10-01.md` addressed. Hard rules honored: no existing session row merged/modified/deleted (the ~230 pre-fix fragmented rows remain Julie's decision); inferred-estimate corrections use negative adjustment rows only.
+- M1: `client_session_id` UNIQUE column + `ON CONFLICT DO NOTHING` on POST /api/sessions; exact-duplicate fallback replay for key-less retries. Reader contract in READER-SYNC-CONTRACT.md. Old-client limitation: retries whose payload changed (90s merge-extend) 409 and eventually drop — only a Reader build sending the key fully fixes old builds.
+- M2: `localDateTimeIso` appends the device UTC offset; worker normalizes to UTC Z for storage. New writes correct; old shifted rows untouched.
+- M3: read_throughs CHECKs widened (state +paused, format +other) via verbatim table rebuild; UI options now work, including the paused-period machinery.
+- M4: stale (>24h) open timers refused-with-age on start (never auto-modified); stop caps at 24h, 400s end<start, validates timestamps; start defaults local_date.
+- M5/m7: `source` column (timer/manual/reader/inferred/adjustment); late arrivals void overlapped inferred estimates via adjustment rows; downward audiobook corrections void the prior save's estimate.
+- m1: read delete cascades read_state_periods. m2: atomic backfill INSERT..WHERE NOT EXISTS; bootstrap merges duplicate same-state periods for active-day math (4 pre-v0.0.27 duplicate pairs still in D1, untouched). m3: active-read requirement, overlap 409s, local_date-vs-start check, exact-dupe replay. m5: shelf rename 409/404s. m6: NaN→null coercion. m8: read edits send local_date. m9: deleted-read 404 names re-link step (Reader-side surfacing still needed). m10: version labels → 0.0.28.
+- Data migrations are idempotent and run inside the worker on first request (ensureSchema).
 
 ## Data model / behavior
 - Books and read-throughs are separate.

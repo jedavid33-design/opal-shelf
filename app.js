@@ -380,7 +380,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.7</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.28</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -673,11 +673,22 @@ function normalizeTimeValue(value) {
   return `${String(hour).padStart(2,"0")}:${String(minute).padStart(2,"0")}`;
 }
 
+// M2: manual wall-clock times must carry the device's UTC offset. The worker
+// used to interpret a bare "14:30" as UTC (Julie's 2:30pm ET stored as
+// 10:30am ET), and every re-edit compounded the shift. With the offset the
+// worker stores the true instant; display and re-edit round-trip cleanly.
+function deviceUtcOffsetSuffix() {
+  const minutes = -new Date().getTimezoneOffset();
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
+
 function localDateTimeIso(day,time) {
   const normalized=normalizeTimeValue(time);
   if(!normalized)return null;
-  const value=new Date(`${day}T${normalized}:00`);
-  return Number.isNaN(value.getTime())?null:value.toISOString();
+  const iso=`${day}T${normalized}:00${deviceUtcOffsetSuffix()}`;
+  return Number.isNaN(new Date(iso).getTime())?null:iso;
 }
 
 function secondsBetweenLocalTimes(day,startTime,endTime) {
@@ -829,7 +840,16 @@ function sessionRows(read) {
   if(!sessions.length)return `<p class="subtle session-empty">No completed timer sessions for this read-through.</p>`;
   const groups=new Map();
   sessions.forEach(session=>{const key=session.local_date||dateKey(new Date(session.started_at));if(!groups.has(key))groups.set(key,[]);groups.get(key).push(session);});
-  return [...groups.entries()].map(([day,items])=>`<div class="session-day"><strong>${fmtDate(day)}</strong>${items.map(session=>`<div class="session-row"><div><span>${esc(sessionTimeLabel(session))}</span><small>${fmtDuration(session.duration_seconds)}${session.listening_speed!=null?` • ${Number(session.listening_speed)}×`:""}</small></div><button type="button" class="session-menu" data-session-menu="${session.id}" aria-label="Session options" title="Session options">•••</button></div>`).join("")}</div>`).join("");
+  return [...groups.entries()].map(([day,items])=>`<div class="session-day"><strong>${fmtDate(day)}</strong>${items.map(session=>{
+    // Adjustment rows are Shelf's own double-count corrections (M5/m7): label
+    // them plainly and show the subtracted minutes. Totals include them.
+    const isAdjustment=session.source==="adjustment";
+    const label=isAdjustment?"Auto-correction":sessionTimeLabel(session);
+    const sub=isAdjustment
+      ? `−${fmtDuration(-Number(session.duration_seconds||0))} double-count correction`
+      : `${fmtDuration(session.duration_seconds)}${session.listening_speed!=null?` • ${Number(session.listening_speed)}×`:""}`;
+    return `<div class="session-row"><div><span>${esc(label)}</span><small>${esc(sub)}</small></div><button type="button" class="session-menu" data-session-menu="${session.id}" aria-label="Session options" title="Session options">•••</button></div>`;
+  }).join("")}</div>`).join("");
 }
 function sessionSection(read,{open=false}={}) {
   const count=sessionsForRead(read.id).length;
@@ -999,7 +1019,7 @@ function openEditRead(readId) {
   </div>${readThroughSummary(read)}${sessionSection(read,{open:true})}<p class="subtle">Changing Paused, Finished, or DNF back to Reading resumes/repairs this same read-through. It does not create a new reread.</p><div class="form-actions"><button type="button" class="button danger" id="delete-read-from-edit">Delete Read-through</button><button type="button" class="button" data-close>Cancel</button><button class="button primary">Save Read-through</button></div></form>`);
   const form=document.querySelector("#edit-read-form");
   if(read.format==="audiobook"&&audioRuntime)bindAudioProgress(form,audioRuntime,{percentName:"progress_percent",positionName:"edit_content_position",breakdownId:"unused-audio-breakdown"});
-  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.audiobook_runtime_seconds_snapshot=runtimeFromFields(data.snapshot_hours,data.snapshot_minutes);delete data.snapshot_hours;delete data.snapshot_minutes;try{await api(`/api/reads/${read.id}`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast("Read-through updated");}catch(error){toast(error.message);}});
+  form.addEventListener("submit",async(event)=>{event.preventDefault();const data=Object.fromEntries(new FormData(form));data.audiobook_runtime_seconds_snapshot=runtimeFromFields(data.snapshot_hours,data.snapshot_minutes);delete data.snapshot_hours;delete data.snapshot_minutes;data.local_date=state.data.today;try{await api(`/api/reads/${read.id}`,{method:"PUT",body:JSON.stringify(data)});formDialog.close();await refresh();toast("Read-through updated");}catch(error){toast(error.message);}});
   document.querySelector("#delete-read-from-edit").addEventListener("click",()=>deleteRead(read.id,book.id));
 }
 
@@ -1093,15 +1113,19 @@ function showSessionActions(sessionId) {
   if(!session||!session.ended_at)return;
   const read=state.data.reads.find(item=>item.id===session.read_id);
   const book=bookById(session.book_id);
+  // Adjustment rows are Shelf's own corrections: editable/moveable makes no
+  // sense, but Julie can delete one she disagrees with.
+  const isAdjustment=session.source==="adjustment";
 
   document.querySelector("#session-dialog-content").innerHTML=`
     <button class="modal-close" data-session-close aria-label="Close">×</button>
     <p class="eyebrow">Session options</p>
     <h2>${esc(book?.title||"Reading session")}</h2>
-    <p class="subtle">${esc(fmtDate(session.local_date))} · ${esc(sessionTimeLabel(session))} · ${esc(fmtDuration(session.duration_seconds))}</p>
+    <p class="subtle">${esc(fmtDate(session.local_date))} · ${isAdjustment?"Auto-correction":esc(sessionTimeLabel(session))} · ${isAdjustment?`−${esc(fmtDuration(-Number(session.duration_seconds||0)))}`:esc(fmtDuration(session.duration_seconds))}</p>
+    ${isAdjustment?`<p class="subtle">Shelf added this correction when a real session overlapped an estimated one, so the minutes aren't counted twice. Deleting it restores the estimate's full minutes.</p>`:""}
     <div class="session-action-list">
-      <button type="button" class="button session-action" data-session-action="edit">Edit session</button>
-      <button type="button" class="button session-action" data-session-action="move">Move session</button>
+      ${isAdjustment?"":`<button type="button" class="button session-action" data-session-action="edit">Edit session</button>
+      <button type="button" class="button session-action" data-session-action="move">Move session</button>`}
       <button type="button" class="button danger session-action" data-session-action="delete">Delete session</button>
     </div>`;
 

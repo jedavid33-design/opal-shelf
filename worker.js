@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.5 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.28 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -105,13 +105,16 @@ function cleanBook(input) {
   const title = String(input.title || "").trim();
   if (!title) throw new HttpError(400, "Title is required");
   const list = (value) => Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+  // m6: garbage numeric input must coerce to null, never NaN (D1 rejects NaN binds).
+  const numOrNull = (value) => (value === "" || value == null) ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
+  const nonNegOrNull = (value) => { const n = numOrNull(value); return n == null ? null : Math.max(0, n); };
   return {
     title,
     subtitle: String(input.subtitle || "").trim() || null,
     authors_json: JSON.stringify(list(input.authors)),
     cover_url: String(input.cover_url || "").trim() || null,
     series_name: String(input.series_name || "").trim() || null,
-    series_number: input.series_number === "" || input.series_number == null ? null : Number(input.series_number),
+    series_number: numOrNull(input.series_number),
     description: String(input.description || "").trim() || null,
     genres_json: JSON.stringify(list(input.genres)),
     format_metadata: String(input.format_metadata || "").trim() || null,
@@ -119,8 +122,8 @@ function cleanBook(input) {
     asin: String(input.asin || "").trim().toUpperCase() || null,
     publisher: String(input.publisher || "").trim() || null,
     publication_date: String(input.publication_date || "").trim() || null,
-    page_count: input.page_count === "" || input.page_count == null ? null : Math.max(0, Number(input.page_count)),
-    audiobook_runtime_seconds: input.audiobook_runtime_seconds === "" || input.audiobook_runtime_seconds == null ? null : Math.max(0, Number(input.audiobook_runtime_seconds)),
+    page_count: nonNegOrNull(input.page_count),
+    audiobook_runtime_seconds: nonNegOrNull(input.audiobook_runtime_seconds),
     narrators_json: JSON.stringify(list(input.narrators)),
     language: String(input.language || "").trim() || null,
     personal_tags_json: JSON.stringify(list(input.personal_tags)),
@@ -169,16 +172,21 @@ async function ensureReadStatePeriods(db) {
 
   // Backfill one best-known period for existing reads. Historical pauses/DNF gaps
   // from before this release cannot be reconstructed if they were never recorded.
+  // m2: single-statement INSERT..WHERE NOT EXISTS so concurrent bootstraps
+  // cannot double-insert. (No UNIQUE index: 4 pre-v0.0.27 duplicate pairs
+  // remain in production and are Julie's call to remove; the active-day math
+  // in bootstrap() merges overlapping same-state periods instead.)
   const missing=await all(db, `SELECT rt.id,rt.state,rt.start_date,rt.finish_date,rt.created_at
     FROM read_throughs rt
     LEFT JOIN read_state_periods rsp ON rsp.read_id=rt.id
     WHERE rsp.id IS NULL`);
   for(const read of missing) {
     const historicalState=read.state==="active" ? "active" : read.state;
-    await db.prepare("INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at) VALUES (?,?,?,?,?,?)")
+    await db.prepare(`INSERT INTO read_state_periods (id,read_id,state,started_date,ended_date,created_at)
+      SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM read_state_periods WHERE read_id=?)`)
       .bind(id("state"),read.id,historicalState,read.start_date,
         read.state==="active" ? null : (read.finish_date||read.start_date),
-        read.created_at||now()).run();
+        read.created_at||now(),read.id).run();
   }
 }
 
@@ -213,9 +221,12 @@ async function bootstrap(db, url) {
   ]);
   const books = bookRows.map(decodeBook);
   for (const read of reads) {
-    read.active_days = statePeriods
+    // Overlapping same-state periods (pre-v0.0.27 double-inserts) are merged
+    // so days are never double-counted. Data itself is untouched.
+    read.active_days = mergeDateRanges(statePeriods
       .filter((period)=>period.read_id===read.id && period.state==="active")
-      .reduce((sum,period)=>sum+inclusiveDays(period.started_date,period.ended_date||today),0);
+      .map((period)=>[period.started_date, period.ended_date || today]))
+      .reduce((sum,[start,end])=>sum+inclusiveDays(start,end),0);
   }
   const activity = {};
   for (const session of sessions.filter((item) => item.ended_at)) {
@@ -302,12 +313,237 @@ async function ensureBookAsin(db) {
   }
 }
 
+// Wall-clock date of an ISO timestamp in the zone its own offset designates.
+// "2026-10-01T14:30:00-04:00" -> "2026-10-01"; bare "Z"/offset-less -> UTC date.
+function dateKeyInOffset(iso) {
+  const text = String(iso || "");
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return "";
+  const match = text.match(/([+-])(\d{2}):?(\d{2})\s*$/);
+  if (!match) return date.toISOString().slice(0, 10);
+  const offsetMinutes = (match[1] === "-" ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3]));
+  return new Date(date.getTime() + offsetMinutes * 60000).toISOString().slice(0, 10);
+}
+
+// One-time, idempotent schema migrations. Never modifies existing row values:
+// ADD COLUMN / CREATE INDEX only, plus a read_throughs table rebuild that
+// copies every row verbatim to widen the CHECK constraints (M3).
+async function ensureSchema(db) {
+  await ensureBookAsin(db);
+
+  const sessionColumns = await all(db, "PRAGMA table_info(reading_sessions)");
+  const hasSessionColumn = (name) => sessionColumns.some((column) => column.name === name);
+  const columnMigrations = [];
+  // M1: stable client id for idempotent session ingest.
+  if (!hasSessionColumn("client_session_id")) columnMigrations.push("ALTER TABLE reading_sessions ADD COLUMN client_session_id TEXT");
+  // M5/m7: provenance for inferred estimates and their corrections.
+  if (!hasSessionColumn("source")) columnMigrations.push("ALTER TABLE reading_sessions ADD COLUMN source TEXT");
+  if (!hasSessionColumn("adjusts_session_id")) columnMigrations.push("ALTER TABLE reading_sessions ADD COLUMN adjusts_session_id TEXT");
+  for (const sql of columnMigrations) await db.prepare(sql).run();
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_sessions_client_session_id ON reading_sessions(client_session_id)").run();
+
+  // M3: admit 'paused' state and 'other' format so the UI options the app
+  // offers stop 500ing on the D1 CHECK constraints. SQLite cannot ALTER a
+  // CHECK, so the table must be rebuilt — but D1 always enforces foreign
+  // keys and ignores PRAGMA foreign_keys=OFF / legacy_alter_table, so
+  // read_throughs cannot be dropped while reading_sessions / daily_checkins
+  // reference it. Rebuild order: (A) children without the read_throughs FK,
+  // (B) read_throughs with widened CHECKs, (C) children with the FK restored.
+  // Every step is check-then-act, so an interrupted migration resumes
+  // cleanly; rows are copied verbatim and never modified.
+  const tableSql = async (name) =>
+    (await first(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", name))?.sql || "";
+
+  // Rebuild `name` from `createSql` via a staging table, verifying the copy
+  // before dropping the original. Crash-safe: a leftover staging table is
+  // either discarded (original intact) or adopted (original already dropped).
+  const rebuildTable = async (db, name, createSql, columns, indexSqls) => {
+    const staging = `${name}_rebuild_new`;
+    const stagingExists = await first(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", staging);
+    const mainExists = await first(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", name);
+    if (stagingExists && mainExists) await db.prepare(`DROP TABLE ${staging}`).run();
+    else if (stagingExists && !mainExists) {
+      await db.prepare(`ALTER TABLE ${staging} RENAME TO ${name}`).run();
+      for (const idx of indexSqls) await db.prepare(idx).run();
+      return;
+    } else if (!mainExists) {
+      throw new Error(`Migration cannot rebuild missing table ${name}`);
+    }
+    await db.prepare(createSql.replace(name, staging)).run();
+    const cols = columns.join(",");
+    await db.prepare(`INSERT INTO ${staging} (${cols}) SELECT ${cols} FROM ${name}`).run();
+    const newCount = (await first(db, `SELECT COUNT(*) AS n FROM ${staging}`))?.n;
+    const oldCount = (await first(db, `SELECT COUNT(*) AS n FROM ${name}`))?.n;
+    if (newCount !== oldCount) throw new Error(`Migration copy mismatch on ${name}: ${oldCount} -> ${newCount}`);
+    await db.prepare(`DROP TABLE ${name}`).run();
+    await db.prepare(`ALTER TABLE ${staging} RENAME TO ${name}`).run();
+    for (const idx of indexSqls) await db.prepare(idx).run();
+  };
+
+  const RS_COLUMNS = ["id","read_id","book_id","local_date","started_at","ended_at","duration_seconds","created_at","listening_speed","client_session_id","source","adjusts_session_id"];
+  const RS_INDEXES = [
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_timer ON reading_sessions((1)) WHERE ended_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_date ON reading_sessions(local_date)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_read_date ON reading_sessions(read_id, local_date)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_sessions_client_session_id ON reading_sessions(client_session_id)",
+  ];
+  const readingSessionsSql = (withReadThroughFk) => `CREATE TABLE reading_sessions (
+        id TEXT PRIMARY KEY,
+        read_id TEXT NOT NULL${withReadThroughFk ? " REFERENCES read_throughs(id) ON DELETE RESTRICT" : ""},
+        book_id TEXT NOT NULL REFERENCES books(id) ON DELETE RESTRICT,
+        local_date TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_seconds INTEGER,
+        created_at TEXT NOT NULL,
+        listening_speed REAL,
+        client_session_id TEXT,
+        source TEXT,
+        adjusts_session_id TEXT
+      )`;
+  const DC_COLUMNS = ["id","read_id","book_id","session_date","previous_page","new_page","previous_percent","new_percent","pages_read","listening_speed","reconciled_at"];
+  const dailyCheckinsSql = (withReadThroughFk) => `CREATE TABLE daily_checkins (
+        id TEXT PRIMARY KEY,
+        read_id TEXT NOT NULL${withReadThroughFk ? " REFERENCES read_throughs(id) ON DELETE RESTRICT" : ""},
+        book_id TEXT NOT NULL REFERENCES books(id) ON DELETE RESTRICT,
+        session_date TEXT NOT NULL,
+        previous_page INTEGER,
+        new_page INTEGER,
+        previous_percent REAL,
+        new_percent REAL,
+        pages_read INTEGER NOT NULL DEFAULT 0,
+        listening_speed REAL,
+        reconciled_at TEXT NOT NULL,
+        UNIQUE(read_id, session_date)
+      )`;
+  const RT_COLUMNS = ["id","book_id","read_number","start_date","finish_date","state","format","starting_page","starting_percent","progress_page","progress_percent","final_page","final_percent","listening_speed","created_at","updated_at","notes","page_count_snapshot","audiobook_runtime_seconds_snapshot"];
+  const RT_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_reads_book ON read_throughs(book_id, read_number)",
+    "CREATE INDEX IF NOT EXISTS idx_reads_state ON read_throughs(state)",
+  ];
+  const readThroughsWidenedSql = `CREATE TABLE read_throughs (
+        id TEXT PRIMARY KEY,
+        book_id TEXT NOT NULL REFERENCES books(id) ON DELETE RESTRICT,
+        read_number INTEGER NOT NULL,
+        start_date TEXT NOT NULL,
+        finish_date TEXT,
+        state TEXT NOT NULL CHECK (state IN ('active','paused','finished','dnf')),
+        format TEXT NOT NULL CHECK (format IN ('print','ebook','audiobook','other')),
+        starting_page INTEGER,
+        starting_percent REAL,
+        progress_page INTEGER,
+        progress_percent REAL,
+        final_page INTEGER,
+        final_percent REAL,
+        listening_speed REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        notes TEXT,
+        page_count_snapshot INTEGER,
+        audiobook_runtime_seconds_snapshot INTEGER,
+        UNIQUE(book_id, read_number)
+      )`;
+
+  // Phase A/B: widen the parent CHECKs, detaching children first.
+  if (!(await tableSql("read_throughs")).includes("'paused'")) {
+    if ((await tableSql("reading_sessions")).includes("REFERENCES read_throughs")) {
+      await rebuildTable(db, "reading_sessions", readingSessionsSql(false), RS_COLUMNS, RS_INDEXES);
+    }
+    if ((await tableSql("daily_checkins")).includes("REFERENCES read_throughs")) {
+      await rebuildTable(db, "daily_checkins", dailyCheckinsSql(false), DC_COLUMNS, []);
+    }
+    await rebuildTable(db, "read_throughs", readThroughsWidenedSql, RT_COLUMNS, RT_INDEXES);
+  }
+  // Phase C: restore the child FKs once the parent is widened.
+  if ((await tableSql("read_throughs")).includes("'paused'")) {
+    if (!(await tableSql("reading_sessions")).includes("REFERENCES read_throughs")) {
+      await rebuildTable(db, "reading_sessions", readingSessionsSql(true), RS_COLUMNS, RS_INDEXES);
+    }
+    if (!(await tableSql("daily_checkins")).includes("REFERENCES read_throughs")) {
+      await rebuildTable(db, "daily_checkins", dailyCheckinsSql(true), DC_COLUMNS, []);
+    }
+  }
+}
+
+// Insert one negative adjustment row against a single inferred estimate row,
+// voiding `seconds` of it. Never voids more than the row's un-voided remainder.
+// Existing rows are never modified, merged, or deleted.
+async function insertAdjustment(db, inferredRow, seconds, localDate, intervalStart = null, intervalEnd = null) {
+  const already = await first(db, `SELECT COALESCE(SUM(-duration_seconds),0) AS voided FROM reading_sessions WHERE adjusts_session_id=? AND source='adjustment'`, inferredRow.id);
+  const remaining = Math.max(0, Number(inferredRow.duration_seconds || 0) - Number(already?.voided || 0));
+  const voidSeconds = Math.min(Math.round(seconds), remaining);
+  if (voidSeconds <= 0) return null;
+  const adjId = id("session");
+  await db.prepare(`INSERT INTO reading_sessions
+    (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,client_session_id,source,adjusts_session_id,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
+    adjId, inferredRow.read_id, inferredRow.book_id, localDate,
+    intervalStart || inferredRow.started_at, intervalEnd || inferredRow.ended_at,
+    -voidSeconds, null, "adjustment", inferredRow.id, now()).run();
+  return { adjustment_id: adjId, inferred_session_id: inferredRow.id, seconds: voidSeconds };
+}
+
+// M5: a late-arriving real session overlapping an inferred estimate voids the
+// overlapping portion via adjustment rows (see insertAdjustment).
+async function voidInferredOverlap(db, session) {
+  if (!session || !session.ended_at) return { adjusted_seconds: 0, adjustments: [] };
+  const inferred = await all(db, `SELECT * FROM reading_sessions WHERE read_id=? AND source='inferred' AND id<>? AND ended_at IS NOT NULL`, session.read_id, session.id);
+  const sStart = new Date(session.started_at).getTime();
+  const sEnd = new Date(session.ended_at).getTime();
+  if (Number.isNaN(sStart) || Number.isNaN(sEnd) || sEnd <= sStart) return { adjusted_seconds: 0, adjustments: [] };
+  let adjusted = 0;
+  const adjustments = [];
+  for (const row of inferred) {
+    const iStart = new Date(row.started_at).getTime();
+    const iEnd = new Date(row.ended_at).getTime();
+    if (Number.isNaN(iStart) || Number.isNaN(iEnd) || iEnd <= iStart) continue;
+    const overlapStart = Math.max(sStart, iStart);
+    const overlapEnd = Math.min(sEnd, iEnd);
+    const overlapSeconds = Math.round((overlapEnd - overlapStart) / 1000);
+    if (overlapSeconds <= 0) continue;
+    const adj = await insertAdjustment(db, row, overlapSeconds, session.local_date,
+      new Date(overlapStart).toISOString(), new Date(overlapEnd).toISOString());
+    if (adj) { adjusted += adj.seconds; adjustments.push(adj); }
+  }
+  return { adjusted_seconds: adjusted, adjustments };
+}
+
+// m7: void inferred estimates created by the immediately preceding save
+// (created_at >= sinceIso) when an audiobook advance is corrected downward.
+async function voidInferredSince(db, readId, sinceIso, localDate = null) {
+  const rows = localDate
+    ? await all(db, `SELECT * FROM reading_sessions WHERE read_id=? AND source='inferred' AND local_date=? AND created_at>=? AND ended_at IS NOT NULL`, readId, localDate, sinceIso)
+    : await all(db, `SELECT * FROM reading_sessions WHERE read_id=? AND source='inferred' AND created_at>=? AND ended_at IS NOT NULL`, readId, sinceIso);
+  let adjusted = 0;
+  const adjustments = [];
+  for (const row of rows) {
+    const adj = await insertAdjustment(db, row, Number(row.duration_seconds || 0), row.local_date);
+    if (adj) { adjusted += adj.seconds; adjustments.push(adj); }
+  }
+  return { adjusted_seconds: adjusted, adjustments };
+}
+
+// Merge overlapping/adjacent date ranges so duplicate same-state periods
+// (pre-v0.0.27 double-inserts Julie hasn't decided to remove) can't
+// double-count days. Pure read-path computation; data untouched.
+function mergeDateRanges(ranges) {
+  const sorted = ranges.filter(([s, e]) => s && e && e >= s)
+    .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  const merged = [];
+  for (const [s, e] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && s <= addCalendarDays(last[1], 1)) last[1] = e > last[1] ? e : last[1];
+    else merged.push([s, e]);
+  }
+  return merged;
+}
+
 async function handleApi(request, env, url) {
   auth(request, env);
   const db = env.DB;
   const path = url.pathname;
   const method = request.method;
-  await ensureBookAsin(db);
+  await ensureSchema(db);
 
   if (path === "/api/bootstrap" && method === "GET") return json(await bootstrap(db, url));
   if (path === "/api/checkins/pending" && method === "GET") return json(await pendingCheckins(db, url.searchParams.get("date") || localDateKey()));
@@ -331,7 +567,7 @@ async function handleApi(request, env, url) {
     if(looksIsbn){
       try{
         const response=await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(compact)}&jscmd=data&format=json`,{
-          headers:{"user-agent":"OpalShelf/0.0.25 (personal reading tracker)"}
+          headers:{"user-agent":"OpalShelf/0.0.28 (personal reading tracker)"}
         });
         if(response.ok){
           const data=await response.json();
@@ -360,7 +596,7 @@ async function handleApi(request, env, url) {
       const olQuery=looksIsbn?`isbn:${compact}`:query;
       const fields="key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject,editions";
       const response=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=20&fields=${encodeURIComponent(fields)}`,{
-        headers:{"user-agent":"OpalShelf/0.0.25 (personal reading tracker)"}
+        headers:{"user-agent":"OpalShelf/0.0.28 (personal reading tracker)"}
       });
       if(response.ok){
         const data=await response.json();
@@ -514,19 +750,21 @@ async function handleApi(request, env, url) {
     if (!book) throw new HttpError(404, "Book not found");
     const readId = id("read");
     const timestamp = now();
+    const startDay = input.start_date || input.local_date;
+    if (!startDay) throw new HttpError(400, "Start date is required");
     const format = ["print", "ebook", "audiobook", "other"].includes(input.format) ? input.format : "print";
     const pageSnapshot = format === "print" || format === "ebook" || format === "other" ? book.page_count : null;
     const audioSnapshot = format === "audiobook" ? book.audiobook_runtime_seconds : null;
     await db.batch([
       db.prepare(`INSERT INTO read_throughs (id,book_id,read_number,start_date,state,format,starting_page,starting_percent,progress_page,progress_percent,listening_speed,notes,page_count_snapshot,audiobook_runtime_seconds_snapshot,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
-        readId,input.book_id,Number(sequence.max_number)+1,input.start_date || input.local_date,"active",format,input.starting_page ?? null,input.starting_percent ?? null,input.starting_page ?? null,input.starting_percent ?? null,Number(input.listening_speed || 1),String(input.notes || "").trim() || null,pageSnapshot,audioSnapshot,timestamp,timestamp
+        readId,input.book_id,Number(sequence.max_number)+1,startDay,"active",format,input.starting_page ?? null,input.starting_percent ?? null,input.starting_page ?? null,input.starting_percent ?? null,Number(input.listening_speed || 1),String(input.notes || "").trim() || null,pageSnapshot,audioSnapshot,timestamp,timestamp
       ),
       db.prepare("UPDATE books SET status='reading',book_dnf=0,updated_at=? WHERE id=?").bind(timestamp,input.book_id)
     ]);
     // recordReadStateChange is idempotent: the backfill inside it creates the
     // single opening "active" period, and the explicit same-state insert that
     // used to follow it double-counted active days. Do not add another insert.
-    await recordReadStateChange(db, { id: readId }, "active", input.start_date || input.local_date);
+    await recordReadStateChange(db, { id: readId }, "active", startDay);
     return json(await first(db, "SELECT * FROM read_throughs WHERE id=?", readId), 201);
   }
 
@@ -566,6 +804,7 @@ async function handleApi(request, env, url) {
     await db.batch([
       db.prepare("DELETE FROM reading_sessions WHERE read_id=?").bind(read.id),
       db.prepare("DELETE FROM daily_checkins WHERE read_id=?").bind(read.id),
+      db.prepare("DELETE FROM read_state_periods WHERE read_id=?").bind(read.id),
       db.prepare("DELETE FROM read_throughs WHERE id=?").bind(read.id)
     ]);
     await syncBookStatus(db, read.book_id);
@@ -593,12 +832,13 @@ async function handleApi(request, env, url) {
     let inferredSeconds = 0;
     let timerCovered = false;
     let coveredSeconds = 0;
-    if (read.format === "audiobook" && percent > Number(read.progress_percent ?? read.starting_percent ?? 0)) {
+    let voidedSeconds = 0;
+    const oldPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
+    const deltaPercent = percent - oldPercent;
+    if (read.format === "audiobook" && deltaPercent > 0) {
       const book = await first(db, "SELECT audiobook_runtime_seconds FROM books WHERE id=?", read.book_id);
       const runtime = Number(read.audiobook_runtime_seconds_snapshot || book?.audiobook_runtime_seconds || 0);
       if (runtime > 0) {
-        const oldPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
-        const deltaPercent = percent - oldPercent;
         // Keep all audiobook math in seconds end-to-end.
         // Do not round audiobook positions or intermediate content duration to whole minutes.
         const contentDeltaSeconds = runtime * (deltaPercent / 100);
@@ -619,18 +859,24 @@ async function handleApi(request, env, url) {
         timerCovered = coveredSeconds > 0;
         inferredSeconds = Math.max(0, expectedSeconds - coveredSeconds);
       }
+    } else if (read.format === "audiobook" && deltaPercent < 0) {
+      // m7: downward correction — void inferred estimates created by the
+      // immediately preceding (over-reported) save. Existing rows untouched.
+      const voided = await voidInferredSince(db, read.id, read.updated_at || read.created_at || timestamp);
+      voidedSeconds = voided.adjusted_seconds;
     }
     const updates = [db.prepare("UPDATE read_throughs SET progress_page=?, progress_percent=?, listening_speed=?, updated_at=? WHERE id=?").bind(page,percent,speed,timestamp,read.id)];
     if (inferredSeconds) {
       const endedAt = timestamp;
       const startedAt = new Date(new Date(endedAt).getTime() - inferredSeconds * 1000).toISOString();
-      updates.push(db.prepare("INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at) VALUES (?,?,?,?,?,?,?,?,?)").bind(
-        id("session"),read.id,read.book_id,input.local_date || endedAt.slice(0,10),startedAt,endedAt,inferredSeconds,speed,timestamp
+      updates.push(db.prepare("INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,source,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(
+        id("session"),read.id,read.book_id,input.local_date || endedAt.slice(0,10),startedAt,endedAt,inferredSeconds,speed,"inferred",timestamp
       ));
     }
     await db.batch(updates);
     const updated = await first(db, "SELECT * FROM read_throughs WHERE id=?", read.id);
-    return json({ ...updated, inferred_duration_seconds:inferredSeconds, timer_covered:timerCovered, timer_covered_seconds:coveredSeconds || 0 });
+    return json({ ...updated, inferred_duration_seconds:inferredSeconds, timer_covered:timerCovered, timer_covered_seconds:coveredSeconds || 0,
+      ...(voidedSeconds ? { voided_inferred_seconds:voidedSeconds } : {}) });
   }
 
   const finishMatch = path.match(/^\/api\/reads\/([^/]+)\/(finish|dnf)$/);
@@ -683,12 +929,12 @@ async function handleApi(request, env, url) {
             const endedAt = timestamp;
             const startedAt = new Date(new Date(endedAt).getTime() - inferredSeconds * 1000).toISOString();
             await db.prepare(`INSERT INTO reading_sessions
-              (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at)
-              VALUES (?,?,?,?,?,?,?,?,?)`)
+              (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,source,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`)
               .bind(
                 id("session"), read.id, read.book_id,
                 input.local_date || endedAt.slice(0,10),
-                startedAt, endedAt, inferredSeconds, speed, timestamp
+                startedAt, endedAt, inferredSeconds, speed, "inferred", timestamp
               ).run();
           }
         }
@@ -721,25 +967,58 @@ async function handleApi(request, env, url) {
     const input = await parseJson(request);
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=? AND state='active'", input.read_id);
     if (!read) throw new HttpError(404, "Active read-through not found");
+    // m4: validate started_at; default local_date instead of 500ing on NOT NULL.
+    const startDate = new Date(String(input.started_at || now()));
+    if (Number.isNaN(startDate.getTime())) throw new HttpError(400, "Invalid session start time");
+    // M2: canonical UTC for storage.
+    const startedAt = startDate.toISOString();
+    const localDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.local_date || "")) ? String(input.local_date) : localDateKey(startDate);
     const existing = await first(db, "SELECT * FROM reading_sessions WHERE ended_at IS NULL");
-    if (existing) throw new HttpError(409, "Another reading timer is already running");
-    const startedAt = input.started_at || now();
+    if (existing) {
+      // M4: a crashed timer stays open forever and blocks all new timers.
+      // Existing rows are never auto-modified: a stale (>24h) timer is refused
+      // with a message naming its age; Julie stops it herself (stop caps the
+      // duration at 24h). A fresh timer keeps the original 409.
+      const ageMs = Date.now() - new Date(existing.started_at).getTime();
+      if (!Number.isFinite(ageMs) || ageMs < 0) throw new HttpError(409, "A timer with an unreadable start time is still open. Stop it manually before starting a new one.");
+      const ageHours = ageMs / 3600000;
+      if (ageHours > 24) throw new HttpError(409, `A stale timer is still open (started ${Math.floor(ageHours)}h ago). Stop it before starting a new one — stopping caps its duration at 24h.`);
+      throw new HttpError(409, "Another reading timer is already running");
+    }
     const sessionId = id("session");
-    await db.prepare("INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,listening_speed,created_at) VALUES (?,?,?,?,?,?,?)").bind(sessionId,read.id,read.book_id,input.local_date,startedAt,read.format === "audiobook" ? Number(read.listening_speed || 1) : null,now()).run();
+    await db.prepare("INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,listening_speed,source,created_at) VALUES (?,?,?,?,?,?,?,?)").bind(sessionId,read.id,read.book_id,localDate,startedAt,read.format === "audiobook" ? Number(read.listening_speed || 1) : null,"timer",now()).run();
     return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionId), 201);
   }
 
   if (path === "/api/sessions" && method === "POST") {
     const input = await parseJson(request);
     const read = await first(db, "SELECT * FROM read_throughs WHERE id=?", input.read_id);
-    if (!read) throw new HttpError(404, "Read-through not found");
+    // m9: name the recovery step — a deleted read-through otherwise makes the
+    // Reader flush retry 30x then silently drop the minutes.
+    if (!read) throw new HttpError(404, "Read-through not found. If this came from the Opal Reader sync, re-link the book in Opal Shelf and try again.");
+    // m3: sessions belong to active read-throughs only.
+    if (read.state !== "active") throw new HttpError(409, "This read-through is not active; sessions can only be logged while reading");
+
+    // M1: idempotent ingest. The Reader sends a stable client_session_id per
+    // outbox item; a retried POST (response lost after a successful insert)
+    // returns the existing row instead of double-inserting. Pre-idempotency
+    // clients can't send the key — see READER-SYNC-CONTRACT.md.
+    const clientSessionId = String(input.client_session_id || "").trim() || null;
+    if (clientSessionId) {
+      const replay = await first(db, "SELECT * FROM reading_sessions WHERE client_session_id=?", clientSessionId);
+      if (replay) return json({ ...replay, idempotent_replay: true });
+    }
 
     const localDate = String(input.local_date || "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) throw new HttpError(400, "Session date must be YYYY-MM-DD");
 
-    const startedAt = String(input.started_at || "");
-    const startDate = new Date(startedAt);
+    // M2: normalize to UTC for storage. The client sends its device wall-clock
+    // with its UTC offset; the instant is identical, and every SQL TEXT
+    // comparison / sort on timestamps needs a single canonical form.
+    const startedAtInput = String(input.started_at || "");
+    const startDate = new Date(startedAtInput);
     if (Number.isNaN(startDate.getTime())) throw new HttpError(400, "Invalid session start time");
+    const startedAt = startDate.toISOString();
 
     let endedAt = input.ended_at ? String(input.ended_at) : null;
     let duration = null;
@@ -751,7 +1030,36 @@ async function handleApi(request, env, url) {
     } else {
       const endDate = new Date(endedAt);
       if (!endedAt || Number.isNaN(endDate.getTime()) || endDate < startDate) throw new HttpError(400, "Session end must be after session start");
+      endedAt = endDate.toISOString();
       duration = durationSeconds(startDate, endDate);
+    }
+
+    // m3: an exact-duplicate retry without an idempotency key replays the
+    // existing row instead of 409ing (best effort for pre-key clients).
+    if (!clientSessionId) {
+      const exactDupe = await first(db, `SELECT * FROM reading_sessions WHERE read_id=? AND started_at=? AND duration_seconds=? AND ended_at IS NOT NULL LIMIT 1`,
+        read.id, startedAt, duration);
+      if (exactDupe) return json({ ...exactDupe, idempotent_replay: true, replay_match: "exact" });
+    }
+
+    // m3: refuse genuinely overlapping intervals (a retry carrying merged/
+    // extended data, or a mistyped manual entry). Inferred estimates and
+    // their corrections are excluded — those reconcile, below.
+    const overlap = await first(db, `SELECT id, started_at, ended_at FROM reading_sessions
+      WHERE read_id=? AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ?
+      AND (source IS NULL OR source NOT IN ('inferred','adjustment')) LIMIT 1`,
+      read.id, endedAt, startedAt);
+    if (overlap) throw new HttpError(409, `This session overlaps an existing session (${overlap.started_at} – ${overlap.ended_at})`);
+
+    // m3: local_date should be the device date of started_at (±1 day for
+    // timezone edges); beyond that the minutes land on the wrong day.
+    // The check runs on the client's original offset-bearing string.
+    const startDay = dateKeyInOffset(startedAtInput);
+    let localDateWarning = null;
+    if (startDay) {
+      const dayDiff = Math.round((new Date(`${localDate}T00:00:00Z`).getTime() - new Date(`${startDay}T00:00:00Z`).getTime()) / 86400000);
+      if (Math.abs(dayDiff) > 1) throw new HttpError(400, `Session date ${localDate} does not match the session start (${startDay})`);
+      if (dayDiff !== 0) localDateWarning = `Session date ${localDate} differs from the start-time date ${startDay}`;
     }
 
     let listeningSpeed = null;
@@ -763,11 +1071,27 @@ async function handleApi(request, env, url) {
     const sessionId = id("session");
     const timestamp = now();
     await db.prepare(`INSERT INTO reading_sessions
-      (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`)
-      .bind(sessionId,read.id,read.book_id,localDate,startedAt,endedAt,duration,listeningSpeed,timestamp).run();
+      (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,client_session_id,source,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
+      .bind(sessionId,read.id,read.book_id,localDate,startedAt,endedAt,duration,listeningSpeed,clientSessionId,clientSessionId ? "reader" : "manual",timestamp).run();
 
-    return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionId), 201);
+    // A racing retry with the same key inserts nothing; either way the row
+    // addressed by the key is the response, so the outbox can drop the item.
+    const row = clientSessionId
+      ? await first(db, "SELECT * FROM reading_sessions WHERE client_session_id=?", clientSessionId)
+      : await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionId);
+    if (!row) throw new HttpError(500, "Session was not recorded");
+    const inserted = row.id === sessionId;
+
+    // M5: void any inferred estimate this late arrival overlaps.
+    const reconciliation = inserted ? await voidInferredOverlap(db, row) : { adjusted_seconds: 0 };
+
+    return json({
+      ...row,
+      ...(inserted ? {} : { idempotent_replay: true }),
+      ...(localDateWarning ? { local_date_warning: localDateWarning } : {}),
+      ...(reconciliation.adjusted_seconds ? { overlap_adjusted_seconds: reconciliation.adjusted_seconds } : {})
+    }, inserted ? 201 : 200);
   }
 
   const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
@@ -789,20 +1113,23 @@ async function handleApi(request, env, url) {
     const localDate = input.local_date == null ? session.local_date : String(input.local_date).trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) throw new HttpError(400, "Session date must be YYYY-MM-DD");
 
-    const startedAt = input.started_at == null ? session.started_at : String(input.started_at);
-    let endedAt = input.ended_at == null ? session.ended_at : String(input.ended_at);
-    const startDate = new Date(startedAt);
-    let endDate = new Date(endedAt);
+    const startedAtInput = input.started_at == null ? null : String(input.started_at);
+    const endedAtInput = input.ended_at == null ? null : String(input.ended_at);
+    const startDate = new Date(startedAtInput == null ? session.started_at : startedAtInput);
     if (Number.isNaN(startDate.getTime())) throw new HttpError(400, "Invalid session start time");
+    // M2: normalize to UTC for storage (see POST /api/sessions).
+    const startedAt = startDate.toISOString();
 
     let duration = Number(session.duration_seconds || 0);
+    let endedAt;
     if (input.duration_seconds != null && input.duration_seconds !== "") {
       duration = Math.max(0, Math.round(Number(input.duration_seconds)));
       if (!Number.isFinite(duration)) throw new HttpError(400, "Invalid session duration");
-      endDate = new Date(startDate.getTime() + duration * 1000);
-      endedAt = endDate.toISOString();
+      endedAt = new Date(startDate.getTime() + duration * 1000).toISOString();
     } else {
+      const endDate = new Date(endedAtInput == null ? session.ended_at : endedAtInput);
       if (Number.isNaN(endDate.getTime()) || endDate < startDate) throw new HttpError(400, "Session end must be after session start");
+      endedAt = endDate.toISOString();
       duration = durationSeconds(startDate, endDate);
     }
 
@@ -815,17 +1142,34 @@ async function handleApi(request, env, url) {
       }
     }
 
+    // m3: an edit must not create an overlap either (inferred estimates and
+    // corrections excluded — those reconcile below).
+    const overlap = await first(db, `SELECT id, started_at, ended_at FROM reading_sessions
+      WHERE read_id=? AND id<>? AND ended_at IS NOT NULL AND started_at < ? AND ended_at > ?
+      AND (source IS NULL OR source NOT IN ('inferred','adjustment')) LIMIT 1`,
+      readId, session.id, endedAt, startedAt);
+    if (overlap) throw new HttpError(409, `This session would overlap an existing session (${overlap.started_at} – ${overlap.ended_at})`);
+
     await db.prepare(`UPDATE reading_sessions SET
       read_id=?,book_id=?,local_date=?,started_at=?,ended_at=?,duration_seconds=?,listening_speed=?
       WHERE id=?`).bind(readId,bookId,localDate,startedAt,endedAt,duration,listeningSpeed,session.id).run();
-    return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", session.id));
+    const updatedSession = await first(db, "SELECT * FROM reading_sessions WHERE id=?", session.id);
+    // M5: an edited interval may now cover an inferred estimate.
+    const reconciliation = await voidInferredOverlap(db, updatedSession);
+    return json({ ...updatedSession,
+      ...(reconciliation.adjusted_seconds ? { overlap_adjusted_seconds: reconciliation.adjusted_seconds } : {}) });
   }
 
   if (sessionMatch && method === "DELETE") {
     const session = await first(db, "SELECT * FROM reading_sessions WHERE id=?", sessionMatch[1]);
     if (!session) throw new HttpError(404, "Session not found");
     if (!session.ended_at) throw new HttpError(409, "Stop this timer before deleting the session");
-    await db.prepare("DELETE FROM reading_sessions WHERE id=?").bind(session.id).run();
+    await db.batch([
+      // Corrections belong to their inferred estimate; deleting the estimate
+      // deletes its corrections so no orphaned negative minutes remain.
+      db.prepare("DELETE FROM reading_sessions WHERE adjusts_session_id=? AND source='adjustment'").bind(session.id),
+      db.prepare("DELETE FROM reading_sessions WHERE id=?").bind(session.id)
+    ]);
     return json({ ok:true, deleted_session_id:session.id });
   }
 
@@ -835,9 +1179,25 @@ async function handleApi(request, env, url) {
     const session = await first(db, "SELECT * FROM reading_sessions WHERE id=?", stopMatch[1]);
     if (!session) throw new HttpError(404, "Session not found");
     if (session.ended_at) return json(session);
-    const endedAt = input.ended_at || now();
-    await db.prepare("UPDATE reading_sessions SET ended_at=?,duration_seconds=? WHERE id=?").bind(endedAt,durationSeconds(session.started_at,endedAt),session.id).run();
-    return json(await first(db, "SELECT * FROM reading_sessions WHERE id=?", session.id));
+    const endDate = new Date(String(input.ended_at || now()));
+    if (Number.isNaN(endDate.getTime())) throw new HttpError(400, "Invalid session end time");
+    // M2: canonical UTC for storage.
+    const endedAt = endDate.toISOString();
+    const startDate = new Date(session.started_at);
+    if (Number.isNaN(startDate.getTime())) throw new HttpError(400, "This timer has an unreadable start time and cannot be stopped automatically");
+    // M4: end-before-start is a 400, not a silent 0.
+    if (endDate < startDate) throw new HttpError(400, "Session end must be after session start");
+    // M4: a crashed timer accrues unbounded duration — cap at 24h with a flag.
+    const MAX_TIMER_SECONDS = 24 * 3600;
+    const rawDuration = durationSeconds(startDate, endDate);
+    const capped = rawDuration > MAX_TIMER_SECONDS;
+    const duration = capped ? MAX_TIMER_SECONDS : rawDuration;
+    await db.prepare("UPDATE reading_sessions SET ended_at=?,duration_seconds=? WHERE id=?").bind(endedAt,duration,session.id).run();
+    const row = await first(db, "SELECT * FROM reading_sessions WHERE id=?", session.id);
+    const reconciliation = await voidInferredOverlap(db, row);
+    return json({ ...row,
+      ...(capped ? { duration_capped: true, uncapped_duration_seconds: rawDuration } : {}),
+      ...(reconciliation.adjusted_seconds ? { overlap_adjusted_seconds: reconciliation.adjusted_seconds } : {}) });
   }
 
   if (path === "/api/checkins" && method === "POST") {
@@ -851,7 +1211,7 @@ async function handleApi(request, env, url) {
     // A rollover reconciliation belongs to the day whose sessions are being reconciled.
     // Derive that day's starting point from the most recent earlier daily check-in,
     // falling back to the read-through's original starting progress.
-    const prior = await first(db, `SELECT new_page,new_percent
+    const prior = await first(db, `SELECT new_page,new_percent,reconciled_at
       FROM daily_checkins
       WHERE read_id=? AND session_date<?
       ORDER BY session_date DESC, reconciled_at DESC
@@ -876,6 +1236,7 @@ async function handleApi(request, env, url) {
     // part of the advance and are subtracted; re-saving the same check-in
     // advances nothing, so no duplicate session can be created.
     let inferredSeconds = 0;
+    let voidedSeconds = 0;
     if (read.format === "audiobook" && Number.isFinite(newPercent)) {
       const oldPercent = Number(read.progress_percent ?? read.starting_percent ?? 0);
       const deltaPercent = newPercent - oldPercent;
@@ -889,6 +1250,14 @@ async function handleApi(request, env, url) {
           const coveredSeconds = daySessions.reduce((sum, session) => sum + Math.max(0, Number(session.duration_seconds || 0)), 0);
           inferredSeconds = Math.max(0, expectedSeconds - coveredSeconds);
         }
+      } else if (deltaPercent < 0) {
+        // m7: downward correction — void inferred estimates created by the
+        // over-reported save (the same-date check-in being replaced, else any
+        // save since the previous check-in). Existing rows untouched.
+        const sameDate = await first(db, "SELECT reconciled_at FROM daily_checkins WHERE read_id=? AND session_date=?", read.id, sessionDate);
+        const sinceIso = sameDate?.reconciled_at || prior?.reconciled_at || read.created_at || timestamp;
+        const voided = await voidInferredSince(db, read.id, sinceIso, sessionDate);
+        voidedSeconds = voided.adjusted_seconds;
       }
     }
 
@@ -925,8 +1294,8 @@ async function handleApi(request, env, url) {
       // clock time is unknown, but local_date is what every view groups by.
       const endedAt = new Date(`${sessionDate}T12:00:00Z`);
       const startedAt = new Date(endedAt.getTime() - inferredSeconds * 1000);
-      await db.prepare(`INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
-        .bind(id("session"),read.id,read.book_id,sessionDate,startedAt.toISOString(),endedAt.toISOString(),inferredSeconds,Math.max(0.05, Number(speed || 1)),timestamp).run();
+      await db.prepare(`INSERT INTO reading_sessions (id,read_id,book_id,local_date,started_at,ended_at,duration_seconds,listening_speed,source,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .bind(id("session"),read.id,read.book_id,sessionDate,startedAt.toISOString(),endedAt.toISOString(),inferredSeconds,Math.max(0.05, Number(speed || 1)),"inferred",timestamp).run();
     }
 
     return json({
@@ -937,7 +1306,8 @@ async function handleApi(request, env, url) {
       pages_read:pagesRead,
       previous_percent:previousPercent,
       new_percent:newPercent,
-      inferred_duration_seconds:inferredSeconds
+      inferred_duration_seconds:inferredSeconds,
+      ...(voidedSeconds ? { voided_inferred_seconds:voidedSeconds } : {})
     });
   }
 
@@ -958,6 +1328,8 @@ async function handleApi(request, env, url) {
     const input = await parseJson(request);
     const name = String(input.name || "").trim();
     if (!name) throw new HttpError(400, "Shelf name is required");
+    const existingName = await first(db, "SELECT id FROM custom_shelves WHERE name=? COLLATE NOCASE", name);
+    if (existingName) throw new HttpError(409, `A shelf named "${name}" already exists`);
     const shelfId = id("shelf");
     await db.prepare("INSERT INTO custom_shelves (id,name,created_at,updated_at) VALUES (?,?,?,?)").bind(shelfId,name,now(),now()).run();
     return json(await first(db, "SELECT * FROM custom_shelves WHERE id=?", shelfId), 201);
@@ -966,10 +1338,18 @@ async function handleApi(request, env, url) {
   const shelfMatch = path.match(/^\/api\/shelves\/([^/]+)$/);
   if (shelfMatch && method === "PUT") {
     const input = await parseJson(request);
-    await db.prepare("UPDATE custom_shelves SET name=?,updated_at=? WHERE id=?").bind(String(input.name || "").trim(),now(),shelfMatch[1]).run();
+    const name = String(input.name || "").trim();
+    if (!name) throw new HttpError(400, "Shelf name is required");
+    const shelf = await first(db, "SELECT id FROM custom_shelves WHERE id=?", shelfMatch[1]);
+    if (!shelf) throw new HttpError(404, "Shelf not found");
+    const collision = await first(db, "SELECT id FROM custom_shelves WHERE name=? COLLATE NOCASE AND id<>?", name, shelfMatch[1]);
+    if (collision) throw new HttpError(409, `A shelf named "${name}" already exists`);
+    await db.prepare("UPDATE custom_shelves SET name=?,updated_at=? WHERE id=?").bind(name,now(),shelfMatch[1]).run();
     return json({ ok: true });
   }
   if (shelfMatch && method === "DELETE") {
+    const shelf = await first(db, "SELECT id FROM custom_shelves WHERE id=?", shelfMatch[1]);
+    if (!shelf) throw new HttpError(404, "Shelf not found");
     await db.prepare("DELETE FROM custom_shelves WHERE id=?").bind(shelfMatch[1]).run();
     return json({ ok: true });
   }
@@ -994,7 +1374,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.27" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.28" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
