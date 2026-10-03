@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.31 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.32 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -333,7 +333,7 @@ async function widgetCurrentlyReadingPage(db, url) {
           <div class="title">${title}</div>
           <div class="author">${author}</div>
           <div class="progress">${percent}</div>
-          <div class="today"><span class="book-icon">▱</span><span>${timeLabel}</span></div>
+          <div class="today"><span>${timeLabel}</span></div>
         </div>
       </section>
     </main>` : `
@@ -353,7 +353,7 @@ async function widgetCurrentlyReadingPage(db, url) {
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#eee6f1}
   body{font-family:"Avenir Next",Avenir,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#552048}
   .widget{
-    width:100vw;height:100vh;position:relative;overflow:hidden;padding:6.5% 7.5% 7.5%;
+    width:100vw;height:100vw;position:relative;overflow:hidden;padding:6.5% 7.5% 7.5%;
     background:
       radial-gradient(circle at 13% 15%,rgba(255,222,239,.92),transparent 31%),
       radial-gradient(circle at 84% 17%,rgba(195,226,255,.88),transparent 32%),
@@ -1548,7 +1548,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.31" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.32" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
