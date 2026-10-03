@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.30 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.31 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -268,7 +268,7 @@ async function bootstrap(db, url) {
 // Returns books with status='reading' plus progress and today's activity.
 async function widgetCurrentlyReading(db, url) {
   const today = url.searchParams.get("date") || localDateKey();
-  const bookRows = await all(db, "SELECT * FROM books WHERE widget_featured=1 ORDER BY updated_at DESC");
+  const bookRows = await all(db, "SELECT * FROM books WHERE widget_featured=1 ORDER BY updated_at DESC LIMIT 1");
   const books = [];
   for (const row of bookRows) {
     const book = decodeBook(row);
@@ -299,6 +299,113 @@ async function widgetCurrentlyReading(db, url) {
     });
   }
   return { today, books };
+}
+
+
+function escapeWidgetHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+async function widgetCurrentlyReadingPage(db, url) {
+  const data = await widgetCurrentlyReading(db, url);
+  const book = data.books[0] || null;
+  const title = escapeWidgetHtml(book?.title || "No book selected");
+  const author = escapeWidgetHtml(book?.author || "");
+  const cover = escapeWidgetHtml(book?.cover_url || "");
+  const percentValue = book?.progress_percent == null ? null : Math.max(0, Math.min(100, Math.round(Number(book.progress_percent))));
+  const percent = percentValue == null ? "—" : percentValue + "%";
+  const minutes = Math.max(0, Math.round(Number(book?.seconds_today || 0) / 60));
+  const timeLabel = minutes + " min today";
+
+  const body = book ? `
+    <main class="widget">
+      <header>CURRENTLY READING</header>
+      <section class="content">
+        <div class="cover-wrap">
+          ${cover ? `<img class="cover" src="${cover}" alt="">` : `<div class="cover placeholder"></div>`}
+        </div>
+        <div class="details">
+          <div class="title">${title}</div>
+          <div class="author">${author}</div>
+          <div class="progress">${percent}</div>
+          <div class="today"><span class="book-icon">▱</span><span>${timeLabel}</span></div>
+        </div>
+      </section>
+    </main>` : `
+    <main class="widget empty">
+      <header>CURRENTLY READING</header>
+      <div class="empty-copy">Choose “Show in widget” on a book in Opal Shelf.</div>
+    </main>`;
+
+  const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#eee6f1}
+  body{font-family:"Avenir Next",Avenir,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#552048}
+  .widget{
+    width:100vw;height:100vh;position:relative;overflow:hidden;padding:6.5% 7.5% 7.5%;
+    background:
+      radial-gradient(circle at 13% 15%,rgba(255,222,239,.92),transparent 31%),
+      radial-gradient(circle at 84% 17%,rgba(195,226,255,.88),transparent 32%),
+      radial-gradient(circle at 76% 82%,rgba(202,238,232,.72),transparent 35%),
+      radial-gradient(circle at 18% 82%,rgba(255,218,196,.78),transparent 34%),
+      radial-gradient(circle at 52% 53%,rgba(218,205,244,.82),transparent 42%),
+      linear-gradient(145deg,#f3e9f6 0%,#dce8f6 48%,#f4dfe7 100%);
+  }
+  .widget:before,.widget:after{content:"";position:absolute;inset:-20%;pointer-events:none}
+  .widget:before{
+    opacity:.30;
+    background:
+      linear-gradient(115deg,transparent 30%,rgba(255,255,255,.75) 42%,transparent 54%),
+      linear-gradient(25deg,transparent 37%,rgba(191,232,245,.55) 50%,transparent 63%);
+    transform:rotate(-7deg);
+  }
+  header{
+    position:relative;z-index:1;text-align:center;font-weight:700;letter-spacing:.035em;
+    font-size:clamp(22px,6.4vw,48px);line-height:1.05;white-space:nowrap;
+  }
+  .content{
+    position:relative;z-index:1;height:calc(100% - 13%);display:grid;
+    grid-template-columns:44% 1fr;gap:7%;align-items:center;padding-top:2%;
+  }
+  .cover-wrap{display:flex;align-items:center;justify-content:center;width:100%}
+  .cover{
+    display:block;width:100%;max-height:70vh;object-fit:contain;border-radius:4.5%;
+    box-shadow:0 3px 10px rgba(62,31,67,.18);
+  }
+  .placeholder{aspect-ratio:2/3;background:rgba(255,255,255,.35);border-radius:4.5%}
+  .details{min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}
+  .title{font-size:clamp(24px,8.2vw,58px);line-height:1.02;font-weight:700;max-width:100%;overflow-wrap:anywhere}
+  .author{font-size:clamp(15px,4.4vw,32px);line-height:1.12;font-weight:500;margin-top:4%;opacity:.88;max-width:100%;overflow-wrap:anywhere}
+  .progress{font-size:clamp(42px,13vw,92px);line-height:.95;font-weight:700;margin-top:12%;letter-spacing:-.035em}
+  .today{display:flex;align-items:center;gap:.38em;font-size:clamp(15px,4.5vw,32px);font-weight:500;margin-top:9%;white-space:nowrap}
+  .book-icon{font-size:1.25em;line-height:1;transform:rotate(90deg);display:inline-block}
+  .empty{display:flex;flex-direction:column;align-items:center}
+  .empty-copy{position:relative;z-index:1;margin:auto;text-align:center;font-size:clamp(18px,5vw,34px);font-weight:500;max-width:78%}
+</style>
+</head>
+<body>${body}</body>
+</html>`;
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+      "pragma": "no-cache",
+      "expires": "0"
+    }
+  });
 }
 
 async function pendingCheckins(db, date) {
@@ -755,9 +862,17 @@ async function handleApi(request, env, url) {
     const bookId = widgetFeaturedMatch[1];
     const body = await parseJson(request);
     const featured = body.featured ? 1 : 0;
-    const result = await db.prepare("UPDATE books SET widget_featured=?, updated_at=? WHERE id=?")
-      .bind(featured, now(), bookId).run();
-    if (!result.meta.changes) throw new HttpError(404, "Book not found");
+    const timestamp = now();
+    const book = await first(db, "SELECT id FROM books WHERE id=?", bookId);
+    if (!book) throw new HttpError(404, "Book not found");
+    if (featured) {
+      await db.batch([
+        db.prepare("UPDATE books SET widget_featured=0 WHERE widget_featured<>0"),
+        db.prepare("UPDATE books SET widget_featured=1, updated_at=? WHERE id=?").bind(timestamp, bookId)
+      ]);
+    } else {
+      await db.prepare("UPDATE books SET widget_featured=0, updated_at=? WHERE id=?").bind(timestamp, bookId).run();
+    }
     return json({ id: bookId, widget_featured: Boolean(featured) });
   }
   const bookMatch = path.match(/^\/api\/books\/([^/]+)$/);
@@ -1426,10 +1541,14 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === "/widget/currently-reading" && request.method === "GET") {
+        await ensureSchema(env.DB);
+        return widgetCurrentlyReadingPage(env.DB, url);
+      }
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.28" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.31" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
