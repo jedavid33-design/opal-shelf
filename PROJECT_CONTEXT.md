@@ -8,11 +8,17 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.31
+- Version: 0.0.33
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
 - Strict rule: no paid catalog/API services.
+
+## v0.0.33 — widget reading streak (2026-10-03)
+- The live small Widgy renderer now includes Julie's existing Opal Shelf current reading streak.
+- Streak uses the same `computeStreak` + daily-goal qualification logic as the Shelf dashboard, including minute/page goals and paused-goal days.
+- Display is a compact line beneath today's reading time: `🔥 N day(s) streak`.
+- Cloudflare Worker redeploy required.
 
 ## v0.0.31 — live Widgy renderer (2026-10-03)
 - The Shelf book-detail “Show in widget” checkmark is the sole source of truth for the iOS small Currently Reading widget.
