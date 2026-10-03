@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.32 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.33 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -298,7 +298,22 @@ async function widgetCurrentlyReading(db, url) {
       pages_today: pagesToday,
     });
   }
-  return { today, books };
+  const [goals, sessions, checkins] = await Promise.all([
+    all(db, "SELECT * FROM goal_history ORDER BY effective_date"),
+    all(db, "SELECT * FROM reading_sessions WHERE ended_at IS NOT NULL ORDER BY started_at"),
+    all(db, "SELECT * FROM daily_checkins ORDER BY session_date")
+  ]);
+  const activity = {};
+  for (const session of sessions) {
+    activity[session.local_date] ||= { seconds: 0, pages: 0 };
+    activity[session.local_date].seconds += Number(session.duration_seconds || 0);
+  }
+  for (const checkin of checkins) {
+    activity[checkin.session_date] ||= { seconds: 0, pages: 0 };
+    activity[checkin.session_date].pages += Number(checkin.pages_read || 0);
+  }
+  const streak = computeStreak(goals, activity, today);
+  return { today, books, streak };
 }
 
 
@@ -321,6 +336,8 @@ async function widgetCurrentlyReadingPage(db, url) {
   const percent = percentValue == null ? "—" : percentValue + "%";
   const minutes = Math.max(0, Math.round(Number(book?.seconds_today || 0) / 60));
   const timeLabel = minutes + " min today";
+  const streakDays = Math.max(0, Number(data.streak?.current || 0));
+  const streakLabel = streakDays + " day" + (streakDays === 1 ? "" : "s") + " streak";
 
   const body = book ? `
     <main class="widget">
@@ -334,6 +351,7 @@ async function widgetCurrentlyReadingPage(db, url) {
           <div class="author">${author}</div>
           <div class="progress">${percent}</div>
           <div class="today"><span>${timeLabel}</span></div>
+          <div class="streak">🔥 ${streakLabel}</div>
         </div>
       </section>
     </main>` : `
@@ -389,7 +407,7 @@ async function widgetCurrentlyReadingPage(db, url) {
   .author{font-size:clamp(15px,4.4vw,32px);line-height:1.12;font-weight:500;margin-top:4%;opacity:.88;max-width:100%;overflow-wrap:anywhere}
   .progress{font-size:clamp(42px,13vw,92px);line-height:.95;font-weight:700;margin-top:12%;letter-spacing:-.035em}
   .today{display:flex;align-items:center;gap:.38em;font-size:clamp(15px,4.5vw,32px);font-weight:500;margin-top:9%;white-space:nowrap}
-  .book-icon{font-size:1.25em;line-height:1;transform:rotate(90deg);display:inline-block}
+  .streak{font-size:clamp(13px,3.7vw,26px);font-weight:600;margin-top:5%;white-space:nowrap;opacity:.9}
   .empty{display:flex;flex-direction:column;align-items:center}
   .empty-copy{position:relative;z-index:1;margin:auto;text-align:center;font-size:clamp(18px,5vw,34px);font-weight:500;max-width:78%}
 </style>
@@ -1548,7 +1566,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.32" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.33" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
