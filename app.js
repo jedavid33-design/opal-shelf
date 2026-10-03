@@ -614,7 +614,7 @@ function openBook(bookId) {
   const history=reads.length?reads.map(readHistoryItem).join(""):`<p class="subtle">No reading history yet.</p>`;
   const isRunning=active && state.activeTimer?.read_id===active.id;
   const timerBlocked=state.activeTimer && !isRunning;
-  document.querySelector("#book-dialog-content").innerHTML=`<button class="modal-close" data-close aria-label="Close">×</button><div class="detail-head">${cover(book)}<div><span class="status-chip">${esc(book.status)}</span><h1>${esc(book.title)}</h1><p>${esc(book.subtitle||"")}</p><p class="subtle">${esc(authors(book))}</p><p><strong>${fmtDuration(lifetimeSeconds(book.id))}</strong> lifetime timed reading</p></div></div>
+  document.querySelector("#book-dialog-content").innerHTML=`<button class="modal-close" data-close aria-label="Close">×</button><div class="detail-head">${cover(book)}<div><span class="status-chip">${esc(book.status)}</span><label class="checkbox widget-toggle"><input type="checkbox" id="widget-featured" ${book.widget_featured?"checked":""}> Show in widget</label><h1>${esc(book.title)}</h1><p>${esc(book.subtitle||"")}</p><p class="subtle">${esc(authors(book))}</p><p><strong>${fmtDuration(lifetimeSeconds(book.id))}</strong> lifetime timed reading</p></div></div>
     <div class="tag-row">${(book.genres||[]).map((tag)=>`<span class="format-chip">${esc(tag)}</span>`).join("")}</div>
     <p>${esc(book.description||"No description yet.")}</p>
     <div class="form-actions"><button class="button" id="edit-book">Edit Book</button>${!active?`<button class="button primary" id="start-read">${reads.length?"Start Reread":"Start Reading"}</button>`:`
@@ -627,6 +627,13 @@ function openBook(bookId) {
   if(!bookDialog.open)bookDialog.showModal();
   document.querySelector("#book-dialog-content [data-close]").addEventListener("click",()=>bookDialog.close());
   document.querySelector("#edit-book").addEventListener("click",()=>{bookDialog.close();openEditBook(book);});
+  document.querySelector("#widget-featured")?.addEventListener("change",async(event)=>{
+    try{
+      await api(`/api/books/${book.id}/widget-featured`,{method:"POST",body:JSON.stringify({featured:event.target.checked})});
+      book.widget_featured=event.target.checked;
+      toast(event.target.checked?"Added to widget":"Removed from widget");
+    }catch(error){event.target.checked=!event.target.checked;toast(error.message);}
+  });
   document.querySelector("#start-read")?.addEventListener("click",()=>{bookDialog.close();openStartRead(book);});
   document.querySelector("#book-dialog-content [data-progress]")?.addEventListener("click",(event)=>{bookDialog.close();openProgress(event.currentTarget.dataset.progress);});
   document.querySelector("#book-dialog-content [data-dialog-timer]")?.addEventListener("click",async(event)=>{const action=state.activeTimer?.read_id===event.currentTarget.dataset.dialogTimer?"stop":"start";await timerAction(action,event.currentTarget.dataset.dialogTimer,{reopenBookId:book.id});});

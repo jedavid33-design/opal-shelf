@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.29 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.30 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -97,7 +97,8 @@ function decodeBook(row) {
     narrators: parse(row.narrators_json),
     personal_tags: parse(row.personal_tags_json),
     favorite: Boolean(row.favorite),
-    book_dnf: Boolean(row.book_dnf)
+    book_dnf: Boolean(row.book_dnf),
+    widget_featured: Boolean(row.widget_featured)
   };
 }
 
@@ -267,7 +268,7 @@ async function bootstrap(db, url) {
 // Returns books with status='reading' plus progress and today's activity.
 async function widgetCurrentlyReading(db, url) {
   const today = url.searchParams.get("date") || localDateKey();
-  const bookRows = await all(db, "SELECT * FROM books WHERE status='reading' ORDER BY updated_at DESC");
+  const bookRows = await all(db, "SELECT * FROM books WHERE widget_featured=1 ORDER BY updated_at DESC");
   const books = [];
   for (const row of bookRows) {
     const book = decodeBook(row);
@@ -378,6 +379,12 @@ async function ensureSchema(db) {
   if (!hasSessionColumn("adjusts_session_id")) columnMigrations.push("ALTER TABLE reading_sessions ADD COLUMN adjusts_session_id TEXT");
   for (const sql of columnMigrations) await db.prepare(sql).run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_sessions_client_session_id ON reading_sessions(client_session_id)").run();
+
+  // Widget featured flag: Julie checks books in Shelf to show them in the iOS Widgy widget.
+  const bookColumns = await all(db, "PRAGMA table_info(books)");
+  if (!bookColumns.some((c) => c.name === "widget_featured")) {
+    await db.prepare("ALTER TABLE books ADD COLUMN widget_featured INTEGER NOT NULL DEFAULT 0").run();
+  }
 
   // M3: admit 'paused' state and 'other' format so the UI options the app
   // offers stop 500ing on the D1 CHECK constraints. SQLite cannot ALTER a
@@ -743,6 +750,16 @@ async function handleApi(request, env, url) {
     return json(decodeBook(await first(db, "SELECT * FROM books WHERE id = ?", bookId)), 201);
   }
 
+  const widgetFeaturedMatch = path.match(/^\/api\/books\/([^/]+)\/widget-featured$/);
+  if (widgetFeaturedMatch && method === "POST") {
+    const bookId = widgetFeaturedMatch[1];
+    const body = await parseJson(request);
+    const featured = body.featured ? 1 : 0;
+    const result = await db.prepare("UPDATE books SET widget_featured=?, updated_at=? WHERE id=?")
+      .bind(featured, now(), bookId).run();
+    if (!result.meta.changes) throw new HttpError(404, "Book not found");
+    return json({ id: bookId, widget_featured: Boolean(featured) });
+  }
   const bookMatch = path.match(/^\/api\/books\/([^/]+)$/);
   if (bookMatch && method === "PUT") {
     const raw = await parseJson(request);
