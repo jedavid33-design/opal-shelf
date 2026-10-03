@@ -8,11 +8,19 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.28
+- Version: 0.0.31
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
 - Strict rule: no paid catalog/API services.
+
+## v0.0.31 — live Widgy renderer (2026-10-03)
+- The Shelf book-detail “Show in widget” checkmark is the sole source of truth for the iOS small Currently Reading widget.
+- Selection is singular: checking a new book atomically clears the previous widget selection.
+- Added public read-only `GET /widget/currently-reading` for Widgy Web Screenshot. It renders only the selected book’s cover, title, author, progress, and today’s minutes; it does not expose the library or API token.
+- Widget styling: Avenir Next, dark plum text, full-bleed opal background, centered CURRENTLY READING header, large cover left, vertically centered title/author/progress/time stack right.
+- The widget response sends no-store/no-cache headers to replace the old GitHub Pages `widget-current.png` cache trap.
+- Cloudflare Worker deployment is required after this commit. In Widgy, the existing image layer must be switched from Web URL PNG to Web Screenshot using the deployed Worker’s `/widget/currently-reading` URL.
 
 ## v0.0.28 — full session-integrity audit fixes (2026-10-01)
 All 5 major + 10 minor findings from `~/workspace/site-audits/opal-shelf-AUDIT-2026-10-01.md` addressed. Hard rules honored: no existing session row merged/modified/deleted (the ~230 pre-fix fragmented rows remain Julie's decision); inferred-estimate corrections use negative adjustment rows only.
