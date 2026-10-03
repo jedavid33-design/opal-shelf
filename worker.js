@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.28 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.29 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -261,6 +261,43 @@ async function bootstrap(db, url) {
       annual
     }
   };
+}
+
+// Lightweight endpoint for the iOS Widgy "Currently Reading" widget.
+// Returns books with status='reading' plus progress and today's activity.
+async function widgetCurrentlyReading(db, url) {
+  const today = url.searchParams.get("date") || localDateKey();
+  const bookRows = await all(db, "SELECT * FROM books WHERE status='reading' ORDER BY updated_at DESC");
+  const books = [];
+  for (const row of bookRows) {
+    const book = decodeBook(row);
+    const read = await first(db,
+      "SELECT * FROM read_throughs WHERE book_id=? AND state='active' ORDER BY updated_at DESC", book.id);
+    let secondsToday = 0, pagesToday = 0;
+    if (read) {
+      const s = await first(db,
+        "SELECT SUM(duration_seconds) AS total FROM reading_sessions WHERE read_id=? AND local_date=? AND ended_at IS NOT NULL",
+        read.id, today);
+      secondsToday = Number(s?.total || 0);
+      const c = await first(db,
+        "SELECT SUM(pages_read) AS total FROM daily_checkins WHERE read_id=? AND session_date=?",
+        read.id, today);
+      pagesToday = Number(c?.total || 0);
+    }
+    const authors = book.authors || [];
+    books.push({
+      id: book.id,
+      title: book.title || "",
+      author: typeof authors[0] === "string" ? authors[0] : (authors[0]?.name || ""),
+      cover_url: book.cover_url || "",
+      progress_percent: read?.progress_percent ?? null,
+      progress_page: read?.progress_page ?? null,
+      page_count: book.page_count || read?.page_count_snapshot || null,
+      seconds_today: secondsToday,
+      pages_today: pagesToday,
+    });
+  }
+  return { today, books };
 }
 
 async function pendingCheckins(db, date) {
@@ -547,6 +584,7 @@ async function handleApi(request, env, url) {
 
   if (path === "/api/bootstrap" && method === "GET") return json(await bootstrap(db, url));
   if (path === "/api/checkins/pending" && method === "GET") return json(await pendingCheckins(db, url.searchParams.get("date") || localDateKey()));
+  if (path === "/api/widget/currently-reading" && method === "GET") return json(await widgetCurrentlyReading(db, url));
 
   if (path === "/api/books/search" && method === "GET") {
     const query=String(url.searchParams.get("q")||"").trim();
