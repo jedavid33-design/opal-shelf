@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.38
+- Version: 0.0.39
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -19,6 +19,12 @@
 - Streak uses the same `computeStreak` + daily-goal qualification logic as the Shelf dashboard, including minute/page goals and paused-goal days.
 - Display is a compact line beneath today's reading time: `🔥 N day(s) streak`.
 - Cloudflare Worker redeploy required.
+
+## v0.0.39 — uploaded-cover binary round-trip fix (2026-10-04)
+- Fixed uploaded covers rendering as Safari broken-image placeholders.
+- Cover uploads now bind an explicit byte array to D1 BLOB storage rather than passing the request ArrayBuffer directly.
+- Public cover responses explicitly reconstruct a Uint8Array from D1 BLOB results and include the correct binary content length.
+- Existing broken uploaded covers should be re-uploaded once after this Worker is deployed; future uploads use the corrected binary path.
 
 ## v0.0.38 — Research Again for existing books (2026-10-04)
 - Book detail now includes a Research Again button for books already in Shelf.
