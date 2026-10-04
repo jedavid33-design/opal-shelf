@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.34 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.35 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -407,9 +407,9 @@ async function widgetCurrentlyReadingPage(db, url) {
   .details{min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}
   .title{font-size:clamp(24px,8.2vw,58px);line-height:1.02;font-weight:700;max-width:100%;overflow-wrap:anywhere}
   .author{font-size:clamp(15px,4.4vw,32px);line-height:1.12;font-weight:500;margin-top:4%;opacity:.88;max-width:100%;overflow-wrap:anywhere}
-  .progress{font-size:clamp(42px,13vw,92px);line-height:.95;font-weight:700;margin-top:12%;letter-spacing:-.035em}
-  .today{display:flex;align-items:center;gap:.38em;font-size:clamp(15px,4.5vw,32px);font-weight:500;margin-top:9%;white-space:nowrap}
-  .streak{font-size:clamp(13px,3.7vw,26px);font-weight:600;margin-top:5%;white-space:nowrap;opacity:.9}
+  .progress{font-size:clamp(50px,15vw,104px);line-height:.95;font-weight:700;margin-top:12%;letter-spacing:-.035em}
+  .today{display:flex;align-items:center;gap:.38em;font-size:clamp(18px,5.4vw,38px);font-weight:600;margin-top:8%;white-space:nowrap}
+  .streak{font-size:clamp(17px,4.8vw,34px);font-weight:600;margin-top:4%;white-space:nowrap;opacity:.95}
   .empty{display:flex;flex-direction:column;align-items:center}
   .empty-copy{position:relative;z-index:1;margin:auto;text-align:center;font-size:clamp(18px,5vw,34px);font-weight:500;max-width:78%}
 </style>
@@ -1568,7 +1568,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.34" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.35" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
