@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.36
+- Version: 0.0.37
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -19,6 +19,15 @@
 - Streak uses the same `computeStreak` + daily-goal qualification logic as the Shelf dashboard, including minute/page goals and paused-goal days.
 - Display is a compact line beneath today's reading time: `🔥 N day(s) streak`.
 - Cloudflare Worker redeploy required.
+
+## v0.0.37 — edition-first metadata resolver (2026-10-04)
+- Rebuilt book search ranking around edition identity instead of raw field richness.
+- Exact ISBN matches now outrank fuzzy title/author candidates and remain authoritative for edition-specific fields.
+- Open Library and Google Books records are merged only when they clearly identify the same edition; secondary catalogs fill blanks rather than overwriting exact-edition facts.
+- Search results now expose publication date, publisher, ISBN, and match quality so Julie can distinguish editions before tapping Use.
+- Google descriptions are stripped of HTML before entering Shelf.
+- Language codes are normalized to English when verified.
+- Still free-source only; no paid metadata service added.
 
 ## v0.0.36 — uploaded book covers (2026-10-04)
 - Add/Edit Book now accepts JPEG, PNG, or WebP cover uploads up to 5 MB alongside the existing cover URL and catalog-cover tools.
