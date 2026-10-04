@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.33 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.34 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -267,7 +267,9 @@ async function bootstrap(db, url) {
 // Lightweight endpoint for the iOS Widgy "Currently Reading" widget.
 // Returns books with status='reading' plus progress and today's activity.
 async function widgetCurrentlyReading(db, url) {
-  const today = url.searchParams.get("date") || localDateKey();
+  // Widgy does not send the app's local date. Cloudflare runs in UTC, which
+  // rolled the widget to tomorrow at 8 PM Eastern and made today's minutes 0.
+  const today = url.searchParams.get("date") || localDateKey(new Date(), "America/New_York");
   const bookRows = await all(db, "SELECT * FROM books WHERE widget_featured=1 ORDER BY updated_at DESC LIMIT 1");
   const books = [];
   for (const row of bookRows) {
@@ -1566,7 +1568,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.33" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.34" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
