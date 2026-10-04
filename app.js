@@ -630,7 +630,7 @@ function openBook(bookId) {
   document.querySelector("#book-dialog-content").innerHTML=`<button class="modal-close" data-close aria-label="Close">×</button><div class="detail-head">${cover(book)}<div><span class="status-chip">${esc(book.status)}</span><label class="checkbox widget-toggle"><input type="checkbox" id="widget-featured" ${book.widget_featured?"checked":""}> Show in widget</label><h1>${esc(book.title)}</h1><p>${esc(book.subtitle||"")}</p><p class="subtle">${esc(authors(book))}</p><p><strong>${fmtDuration(lifetimeSeconds(book.id))}</strong> lifetime timed reading</p></div></div>
     <div class="tag-row">${(book.genres||[]).map((tag)=>`<span class="format-chip">${esc(tag)}</span>`).join("")}</div>
     <p>${esc(book.description||"No description yet.")}</p>
-    <div class="form-actions"><button class="button" id="edit-book">Edit Book</button>${!active?`<button class="button primary" id="start-read">${reads.length?"Start Reread":"Start Reading"}</button>`:`
+    <div class="form-actions"><button class="button" id="edit-book">Edit Book</button><button class="button" id="research-book">Research Again</button>${!active?`<button class="button primary" id="start-read">${reads.length?"Start Reread":"Start Reading"}</button>`:`
       <button class="button ${isRunning?"danger":"primary"}" data-dialog-timer="${active.id}" ${timerBlocked?"disabled":""}>${isRunning?"■ Stop Timer":"▶ Start Timer"}</button>
       <button class="button" data-progress="${active.id}">Update Progress</button>
       <button class="button" data-dialog-finish="${active.id}">Finish Read</button>
@@ -640,6 +640,7 @@ function openBook(bookId) {
   if(!bookDialog.open)bookDialog.showModal();
   document.querySelector("#book-dialog-content [data-close]").addEventListener("click",()=>bookDialog.close());
   document.querySelector("#edit-book").addEventListener("click",()=>{bookDialog.close();openEditBook(book);});
+  document.querySelector("#research-book")?.addEventListener("click",()=>{bookDialog.close();openResearchBook(book);});
   document.querySelector("#widget-featured")?.addEventListener("change",async(event)=>{
     try{
       await api(`/api/books/${book.id}/widget-featured`,{method:"POST",body:JSON.stringify({featured:event.target.checked})});
@@ -881,6 +882,60 @@ function readHistoryItem(read) {
     ? `${fmtDuration(read.audiobook_runtime_seconds_snapshot)} audiobook snapshot`
     : read.page_count_snapshot ? `${read.page_count_snapshot} page snapshot` : "No length snapshot";
   return `<article class="history-item"><div class="history-summary"><div><strong>${readLabel(read)} • ${readDateRange(read)} • ${esc(formatLabel(read.format))}</strong><br><span class="status-chip">${read.state==="active"?"Reading":read.state==="paused"?"Paused":esc(read.state)}</span> <span class="subtle">${timed} timed • ${snapshot}</span>${read.notes?`<p class="read-notes">${esc(read.notes)}</p>`:""}</div><div class="history-actions"><button class="button small" data-edit-read="${read.id}">Edit Read-through</button><button class="button small danger" data-delete-read="${read.id}">Delete</button></div></div>${readThroughSummary(read)}${sessionSection(read)}</article>`;
+}
+
+function researchValue(value) {
+  if(Array.isArray(value))return value.join(", ");
+  if(value==null||value==="")return "—";
+  return String(value);
+}
+
+async function openResearchBook(book) {
+  const query=String(book.isbn||book.asin||[book.title,(book.authors||[]).join(" ")].filter(Boolean).join(" ")).trim();
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Book metadata</p><h1>Research Again</h1><p class="subtle">Looking for a better match for <strong>${esc(book.title)}</strong>…</p><div id="research-results"><p class="subtle">Researching…</p></div>`);
+  const target=document.querySelector("#research-results");
+  try{
+    const results=await api(`/api/books/search?q=${encodeURIComponent(query)}`);
+    if(!results.length){target.innerHTML=`<p>No catalog matches found. Your current metadata has not been changed.</p>`;return;}
+    target.innerHTML=`<p class="subtle">Nothing changes until you choose a result and review it.</p>`+
+      results.slice(0,8).map((candidate,index)=>`<div class="search-result">${candidate.cover_url?`<img src="${esc(candidate.cover_url)}" alt="">`:`<div></div>`}<span><strong>${esc(candidate.title)}</strong><br><small>${esc((candidate.authors||[]).join(", "))}${candidate.publication_date?` · ${esc(candidate.publication_date)}`:""}${candidate.publisher?` · ${esc(candidate.publisher)}`:""}${candidate.isbn?` · ISBN ${esc(candidate.isbn)}`:""}${candidate.match_label?` · ${esc(candidate.match_label)}`:""}</small></span><button class="button small" data-review-research="${index}">Review</button></div>`).join("");
+    target.querySelectorAll("[data-review-research]").forEach(button=>button.addEventListener("click",()=>reviewResearchBook(book,results[Number(button.dataset.reviewResearch)])));
+  }catch(error){target.innerHTML=`<p class="error-banner">${esc(error.message)} Your current metadata has not been changed.</p>`;}
+}
+
+function reviewResearchBook(book,candidate) {
+  const fields=[
+    ["title","Title"],["subtitle","Subtitle"],["authors","Authors"],["cover_url","Cover"],
+    ["series_name","Series"],["series_number","Series #"],["description","Description"],["genres","Genres"],
+    ["format_metadata","Edition / format"],["isbn","ISBN"],["asin","ASIN"],["publisher","Publisher"],
+    ["publication_date","Publication date"],["page_count","Page count"],["audiobook_runtime_seconds","Audiobook runtime"],
+    ["narrators","Narrators"],["language","Language"]
+  ];
+  const changed=fields.filter(([key])=>{
+    const next=candidate[key];
+    if(next==null||next===""||(Array.isArray(next)&&!next.length))return false;
+    return researchValue(book[key])!==researchValue(next);
+  });
+  if(!changed.length){
+    formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Research Again</p><h1>No useful changes</h1><p>The selected catalog record does not add anything different to this book.</p><div class="form-actions"><button type="button" class="button" data-close>Close</button></div>`);
+    return;
+  }
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button><p class="eyebrow">Research Again</p><h1>Review Found Metadata</h1><p class="subtle">Check the fields you want to replace. Reading history, status, favorite, personal tags, and sessions are never touched.</p><form id="research-apply-form"><div class="research-compare">${changed.map(([key,label])=>`<label class="checkbox research-row"><input type="checkbox" name="research_field" value="${esc(key)}" checked><span><strong>${esc(label)}</strong><br><small>Current: ${esc(researchValue(book[key]))}<br>Found: ${esc(researchValue(candidate[key]))}</small></span></label>`).join("")}</div><div class="form-actions"><button type="button" class="button" id="research-back">Back</button><button class="button primary">Apply Selected</button></div></form>`);
+  document.querySelector("#research-back")?.addEventListener("click",()=>openResearchBook(book));
+  document.querySelector("#research-apply-form")?.addEventListener("submit",async(event)=>{
+    event.preventDefault();
+    const selected=[...event.currentTarget.querySelectorAll('input[name="research_field"]:checked')].map(input=>input.value);
+    if(!selected.length){toast("Choose at least one field");return;}
+    const payload={...book};
+    for(const key of selected)payload[key]=candidate[key];
+    // Preserve all personal/library state even if a catalog ever returns similarly named fields.
+    payload.status=book.status; payload.favorite=book.favorite; payload.personal_tags=book.personal_tags||[];
+    payload.remove_cover=false;
+    try{
+      await api(`/api/books/${book.id}`,{method:"PUT",body:JSON.stringify(payload)});
+      formDialog.close(); await refresh(); toast("Researched metadata applied");
+    }catch(error){toast(error.message);}
+  });
 }
 
 function openEditBook(book) {
