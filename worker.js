@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.36 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.37 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -738,139 +738,134 @@ async function handleApi(request, env, url) {
     const looksAsin=/^[A-Z0-9]{10}$/i.test(compact)&&!looksIsbn;
     const asin=looksAsin?compact.toUpperCase():"";
     const results=[];
-
+    const norm=(value)=>String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    const queryWords=norm(query).split(" ").filter(w=>w.length>1);
+    const cleanDescription=(value)=>String(value||"").replace(/<br\s*\/?\s*>/gi,"\n").replace(/<[^>]+>/g,"").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();
+    const langName=(value)=>({en:"English",eng:"English"}[String(value||"").toLowerCase()]||String(value||""));
     const pushResult=(book)=>{
       if(!book?.title)return;
+      book.description=cleanDescription(book.description);
+      book.language=langName(book.language);
       results.push(book);
     };
 
-    // 1) Exact ISBN edition lookup. This avoids borrowing metadata from another edition.
+    // Exact ISBN first. Open Library explicitly models ISBN records as editions,
+    // so edition facts here outrank work-level/title-search metadata.
     if(looksIsbn){
       try{
         const response=await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(compact)}&jscmd=data&format=json`,{
-          headers:{"user-agent":"OpalShelf/0.0.28 (personal reading tracker)"}
+          headers:{"user-agent":"OpalShelf/0.0.36 (personal reading tracker)"}
         });
         if(response.ok){
-          const data=await response.json();
-          const b=data[`ISBN:${compact}`];
+          const data=await response.json(), b=data[`ISBN:${compact}`];
           if(b)pushResult({
-            source:"Open Library · exact ISBN",
-            source_id:b.key||`ISBN:${compact}`,
-            title:b.title||"",
-            subtitle:b.subtitle||"",
+            source:"Open Library", match_label:"Exact ISBN edition", match_confidence:"exact",
+            source_id:b.key||`ISBN:${compact}`, title:b.title||"", subtitle:b.subtitle||"",
             authors:(b.authors||[]).map(a=>a.name).filter(Boolean),
-            cover_url:b.cover?.large||b.cover?.medium||b.cover?.small||"",
-            isbn:compact,
-            asin:"",
-            publisher:b.publishers?.[0]?.name||"",
-            publication_date:b.publish_date||"",
-            page_count:b.number_of_pages||"",
-            language:"",
-            genres:(b.subjects||[]).slice(0,5).map(s=>s.name).filter(Boolean)
+            cover_url:b.cover?.large||b.cover?.medium||b.cover?.small||"", isbn:compact, asin:"",
+            publisher:b.publishers?.[0]?.name||"", publication_date:b.publish_date||"",
+            page_count:b.number_of_pages||"", language:"",
+            genres:(b.subjects||[]).slice(0,8).map(s=>s.name).filter(Boolean),
+            exact_identifier_match:true
           });
         }
       }catch(_){}
     }
 
-    // 2) Open Library Search, including edition data so Amazon identifiers can be matched.
+    // Open Library Search supplies both work-level discovery and edition docs.
     try{
       const olQuery=looksIsbn?`isbn:${compact}`:query;
       const fields="key,title,subtitle,author_name,cover_i,isbn,first_publish_year,publisher,language,number_of_pages_median,subject,editions";
       const response=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery)}&limit=20&fields=${encodeURIComponent(fields)}`,{
-        headers:{"user-agent":"OpalShelf/0.0.28 (personal reading tracker)"}
+        headers:{"user-agent":"OpalShelf/0.0.36 (personal reading tracker)"}
       });
       if(response.ok){
         const data=await response.json();
         for(const b of (data.docs||[])){
           const editionDocs=b.editions?.docs||[];
           let matchingEdition=null;
-
           if(asin){
             matchingEdition=editionDocs.find(ed=>{
               const ids=ed.identifiers||{};
-              const amazon=[...(ids.amazon||[]),...(ids.amazon_asin||[]),...(ids.asin||[])].map(String);
-              return amazon.some(id=>id.toUpperCase()===asin);
+              return [...(ids.amazon||[]),...(ids.amazon_asin||[]),...(ids.asin||[])].map(String).some(id=>id.toUpperCase()===asin);
             })||null;
           }else if(looksIsbn){
             matchingEdition=editionDocs.find(ed=>(ed.isbn_10||[]).includes(compact)||(ed.isbn_13||[]).includes(compact))||null;
           }
-
           const edition=matchingEdition||editionDocs[0]||null;
-          const editionIsbns=[
-            ...(edition?.isbn_13||[]),
-            ...(edition?.isbn_10||[]),
-            ...(b.isbn||[])
-          ];
-
+          const editionIsbns=[...(edition?.isbn_13||[]),...(edition?.isbn_10||[]),...(b.isbn||[])];
+          const exact=Boolean(matchingEdition);
           pushResult({
-            source:matchingEdition?(asin?"Open Library · ASIN match":"Open Library · ISBN match"):"Open Library",
-            source_id:edition?.key||b.key,
-            title:edition?.title||b.title,
-            subtitle:edition?.subtitle||b.subtitle||"",
-            authors:b.author_name||[],
+            source:"Open Library", match_label:exact?(asin?"Exact ASIN-linked edition":"Exact ISBN edition"):"Catalog edition",
+            match_confidence:exact?"exact":"candidate", source_id:edition?.key||b.key,
+            title:edition?.title||b.title, subtitle:edition?.subtitle||b.subtitle||"", authors:b.author_name||[],
             cover_url:(edition?.covers?.[0]||b.cover_i)?`https://covers.openlibrary.org/b/id/${edition?.covers?.[0]||b.cover_i}-L.jpg`:"",
-            isbn:looksIsbn?compact:(editionIsbns[0]||""),
-            asin:asin||"",
+            isbn:looksIsbn?compact:(editionIsbns[0]||""), asin:asin||"",
             publisher:edition?.publishers?.[0]||b.publisher?.[0]||"",
             publication_date:edition?.publish_date||(b.first_publish_year?String(b.first_publish_year):""),
             page_count:edition?.number_of_pages||b.number_of_pages_median||"",
-            language:b.language?.[0]||"",
-            genres:(b.subject||[]).slice(0,5),
-            exact_identifier_match:Boolean(matchingEdition)
+            language:edition?.languages?.[0]?.key?.split("/").pop()||b.language?.[0]||"",
+            genres:(b.subject||[]).slice(0,8), exact_identifier_match:exact
           });
         }
       }
     }catch(_){}
 
-    // 3) Google Books is the second free catalog. ISBN lookup is exact where possible.
+    // Google Books is a second free catalog. Its public Volume resource can
+    // contribute description/categories and exact-ISBN edition facts.
     try{
       const googleQuery=looksIsbn?`isbn:${compact}`:query;
-      const response=await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(googleQuery)}&maxResults=20&printType=books`);
+      const response=await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(googleQuery)}&maxResults=20&printType=books&projection=full`);
       if(response.ok){
         const data=await response.json();
         for(const item of (data.items||[])){
-          const v=item.volumeInfo||{};
-          const ids=v.industryIdentifiers||[];
-          const isbn13=ids.find(x=>x.type==="ISBN_13")?.identifier||"";
-          const isbn10=ids.find(x=>x.type==="ISBN_10")?.identifier||"";
+          const v=item.volumeInfo||{}, ids=v.industryIdentifiers||[];
+          const isbn13=ids.find(x=>x.type==="ISBN_13")?.identifier||"", isbn10=ids.find(x=>x.type==="ISBN_10")?.identifier||"";
           const exact=looksIsbn&&(isbn13===compact||isbn10===compact);
           pushResult({
-            source:exact?"Google Books · exact ISBN":"Google Books",
-            source_id:item.id,
-            title:v.title||"",
-            subtitle:v.subtitle||"",
-            authors:v.authors||[],
+            source:"Google Books", match_label:exact?"Exact ISBN edition":"Catalog edition", match_confidence:exact?"exact":"candidate",
+            source_id:item.id, title:v.title||"", subtitle:v.subtitle||"", authors:v.authors||[],
             cover_url:(v.imageLinks?.extraLarge||v.imageLinks?.large||v.imageLinks?.medium||v.imageLinks?.thumbnail||v.imageLinks?.smallThumbnail||"").replace(/^http:/,"https:"),
-            isbn:isbn13||isbn10||"",
-            asin:asin||"",
-            publisher:v.publisher||"",
-            publication_date:v.publishedDate||"",
-            page_count:v.pageCount||"",
-            language:v.language||"",
-            genres:(v.categories||[]).slice(0,5),
-            description:v.description||"",
-            exact_identifier_match:exact
+            isbn:isbn13||isbn10||"", asin:asin||"", publisher:v.publisher||"", publication_date:v.publishedDate||"",
+            page_count:v.pageCount||"", language:v.language||"", genres:(v.categories||[]).slice(0,8),
+            description:v.description||"", exact_identifier_match:exact
           });
         }
       }
     }catch(_){}
 
-    // Rank exact identifier matches first, then richer records, then de-duplicate.
-    const richness=(b)=>
-      (b.cover_url?3:0)+(b.page_count?2:0)+(b.publisher?1:0)+(b.publication_date?1:0)+(b.description?1:0);
-    results.sort((a,b)=>
-      Number(Boolean(b.exact_identifier_match))-Number(Boolean(a.exact_identifier_match))||
-      richness(b)-richness(a)
+    // Merge records only when they clearly describe the same edition. Exact
+    // edition facts stay authoritative; other catalogs only fill blanks.
+    const editionKey=(b)=>{
+      if(b.isbn)return `isbn:${String(b.isbn).replace(/[-\s]/g,"")}`;
+      if(b.asin)return `asin:${String(b.asin).toUpperCase()}`;
+      return `text:${norm(b.title)}::${norm((b.authors||[])[0])}::${norm(b.publisher)}::${String(b.publication_date||"").slice(0,4)}`;
+    };
+    const merged=new Map();
+    for(const candidate of results){
+      const key=editionKey(candidate), existing=merged.get(key);
+      if(!existing){ merged.set(key,{...candidate}); continue; }
+      const primary=existing.match_confidence==="exact"?existing:(candidate.match_confidence==="exact"?candidate:existing);
+      const secondary=primary===existing?candidate:existing;
+      const out={...primary};
+      for(const field of ["subtitle","cover_url","publisher","publication_date","page_count","language","description","isbn","asin"]){
+        if(!out[field]&&secondary[field])out[field]=secondary[field];
+      }
+      if(!(out.authors||[]).length&&(secondary.authors||[]).length)out.authors=secondary.authors;
+      if(!(out.genres||[]).length&&(secondary.genres||[]).length)out.genres=secondary.genres;
+      out.sources=[...new Set([...(existing.sources||[existing.source]),...(candidate.sources||[candidate.source])].filter(Boolean))];
+      merged.set(key,out);
+    }
+
+    const richness=(b)=>(b.cover_url?2:0)+(b.description?2:0)+(b.page_count?1:0)+(b.publisher?1:0)+(b.publication_date?1:0)+(b.isbn?2:0);
+    const relevance=(b)=>{
+      const hay=norm([b.title,...(b.authors||[])].join(" "));
+      return queryWords.reduce((score,word)=>score+(hay.includes(word)?2:0),0);
+    };
+    const unique=[...merged.values()].sort((a,b)=>
+      Number(b.match_confidence==="exact")-Number(a.match_confidence==="exact")||
+      relevance(b)-relevance(a)||richness(b)-richness(a)
     );
-
-    const seen=new Set();
-    const unique=results.filter((b)=>{
-      const key=[String(b.title||"").toLowerCase(),(b.authors||[]).join("|").toLowerCase(),b.isbn||"",b.asin||""].join("::");
-      if(seen.has(key))return false;
-      seen.add(key);
-      return true;
-    });
-
     return json(unique.slice(0,20));
   }
 
@@ -1610,7 +1605,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.36" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.37" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
