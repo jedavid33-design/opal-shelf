@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.37
+- Version: 0.0.38
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -19,6 +19,14 @@
 - Streak uses the same `computeStreak` + daily-goal qualification logic as the Shelf dashboard, including minute/page goals and paused-goal days.
 - Display is a compact line beneath today's reading time: `🔥 N day(s) streak`.
 - Cloudflare Worker redeploy required.
+
+## v0.0.38 — Research Again for existing books (2026-10-04)
+- Book detail now includes a Research Again button for books already in Shelf.
+- Research uses saved ISBN first, then ASIN, then title + author, so the strongest available identifier drives the lookup.
+- Results are review-first: choosing a candidate opens a Current vs Found comparison and nothing is changed automatically.
+- Julie can apply only selected metadata fields.
+- Reading status, favorite flag, personal tags, read-throughs, progress, and reading sessions are explicitly preserved.
+- If research finds nothing useful, Shelf leaves the record untouched.
 
 ## v0.0.37 — edition-first metadata resolver (2026-10-04)
 - Rebuilt book search ranking around edition identity instead of raw field richness.
