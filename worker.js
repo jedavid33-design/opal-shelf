@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.37 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.39 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -909,10 +909,13 @@ async function handleApi(request, env, url) {
     const bytes=await request.arrayBuffer();
     if(!bytes.byteLength)throw new HttpError(400,"Cover image is empty");
     if(bytes.byteLength>5*1024*1024)throw new HttpError(413,"Cover image must be 5 MB or smaller");
+    // D1 BLOB parameters and query results use byte arrays. Binding an
+    // ArrayBuffer can produce a value that does not round-trip as image bytes.
+    const blobBytes=[...new Uint8Array(bytes)];
     const timestamp=now();
     await db.prepare(`INSERT INTO book_cover_assets (book_id,content_type,data,updated_at)
       VALUES (?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET content_type=excluded.content_type,data=excluded.data,updated_at=excluded.updated_at`)
-      .bind(bookId,contentType,bytes,timestamp).run();
+      .bind(bookId,contentType,blobBytes,timestamp).run();
     const coverUrl=`${url.origin}/covers/${encodeURIComponent(bookId)}?v=${Date.now()}`;
     await db.prepare("UPDATE books SET cover_url=?,updated_at=? WHERE id=?").bind(coverUrl,timestamp,bookId).run();
     return json({ok:true,cover_url:coverUrl});
@@ -1600,12 +1603,19 @@ export default {
         await ensureSchema(env.DB);
         const asset=await first(env.DB,"SELECT content_type,data,updated_at FROM book_cover_assets WHERE book_id=?",decodeURIComponent(publicCoverMatch[1]));
         if(!asset)return new Response("Not found",{status:404});
-        return new Response(asset.data,{headers:{"content-type":asset.content_type,"cache-control":"public, max-age=31536000, immutable","etag":`"${asset.updated_at}"`}});
+        // D1 returns BLOB columns as byte arrays. Convert explicitly to a
+        // Uint8Array so the Response body is the original binary image, not a
+        // serialized JavaScript array/string.
+        const imageBytes=asset.data instanceof ArrayBuffer
+          ? new Uint8Array(asset.data)
+          : new Uint8Array(Array.isArray(asset.data)?asset.data:Object.values(asset.data||{}));
+        if(!imageBytes.byteLength)return new Response("Cover data is empty",{status:500});
+        return new Response(imageBytes,{headers:{"content-type":asset.content_type,"content-length":String(imageBytes.byteLength),"cache-control":"public, max-age=31536000, immutable","etag":`"${asset.updated_at}"`}});
       }
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.37" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.39" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
