@@ -8,7 +8,7 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.33
+- Version: 0.0.36
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
@@ -19,6 +19,13 @@
 - Streak uses the same `computeStreak` + daily-goal qualification logic as the Shelf dashboard, including minute/page goals and paused-goal days.
 - Display is a compact line beneath today's reading time: `🔥 N day(s) streak`.
 - Cloudflare Worker redeploy required.
+
+## v0.0.36 — uploaded book covers (2026-10-04)
+- Add/Edit Book now accepts JPEG, PNG, or WebP cover uploads up to 5 MB alongside the existing cover URL and catalog-cover tools.
+- Uploaded image bytes are stored in a dedicated D1 `book_cover_assets` table rather than inline/base64 in `books`, keeping bootstrap/library payloads small.
+- Books keep using `cover_url`; uploaded covers point to the Worker's public opaque `/covers/:bookId` image route, so existing shelf, detail, and Widgy rendering require no special-case UI.
+- Replacing an uploaded cover with an external URL, removing a cover, or deleting a book cleans up the stored image asset.
+- Cloudflare Worker deployment is required after this commit. No manual D1 migration is required; `ensureSchema` creates the cover table idempotently.
 
 ## v0.0.31 — live Widgy renderer (2026-10-03)
 - The Shelf book-detail “Show in widget” checkmark is the sole source of truth for the iOS small Currently Reading widget.
