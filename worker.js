@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.35 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.36 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -507,6 +507,15 @@ async function ensureSchema(db) {
   for (const sql of columnMigrations) await db.prepare(sql).run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_sessions_client_session_id ON reading_sessions(client_session_id)").run();
 
+  // Uploaded covers live outside the books row so bootstrap stays small. The
+  // public cover route exposes only opaque book-id image bytes, never library metadata.
+  await db.prepare(`CREATE TABLE IF NOT EXISTS book_cover_assets (
+    book_id TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  )`).run();
+
   // Widget featured flag: Julie checks books in Shelf to show them in the iOS Widgy widget.
   const bookColumns = await all(db, "PRAGMA table_info(books)");
   if (!bookColumns.some((c) => c.name === "widget_featured")) {
@@ -895,14 +904,39 @@ async function handleApi(request, env, url) {
     }
     return json({ id: bookId, widget_featured: Boolean(featured) });
   }
+  const coverUploadMatch = path.match(/^\/api\/books\/([^/]+)\/cover$/);
+  if (coverUploadMatch && method === "PUT") {
+    const bookId=coverUploadMatch[1];
+    const book=await first(db,"SELECT id FROM books WHERE id=?",bookId);
+    if(!book)throw new HttpError(404,"Book not found");
+    const contentType=String(request.headers.get("content-type")||"").split(";")[0].trim().toLowerCase();
+    if(!["image/jpeg","image/png","image/webp"].includes(contentType))throw new HttpError(415,"Cover must be a JPEG, PNG, or WebP image");
+    const bytes=await request.arrayBuffer();
+    if(!bytes.byteLength)throw new HttpError(400,"Cover image is empty");
+    if(bytes.byteLength>5*1024*1024)throw new HttpError(413,"Cover image must be 5 MB or smaller");
+    const timestamp=now();
+    await db.prepare(`INSERT INTO book_cover_assets (book_id,content_type,data,updated_at)
+      VALUES (?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET content_type=excluded.content_type,data=excluded.data,updated_at=excluded.updated_at`)
+      .bind(bookId,contentType,bytes,timestamp).run();
+    const coverUrl=`${url.origin}/covers/${encodeURIComponent(bookId)}?v=${Date.now()}`;
+    await db.prepare("UPDATE books SET cover_url=?,updated_at=? WHERE id=?").bind(coverUrl,timestamp,bookId).run();
+    return json({ok:true,cover_url:coverUrl});
+  }
+
   const bookMatch = path.match(/^\/api\/books\/([^/]+)$/);
   if (bookMatch && method === "PUT") {
     const raw = await parseJson(request);
     const bookId = bookMatch[1];
     const existingBook = await first(db, "SELECT cover_url FROM books WHERE id=?", bookId);
     if (!existingBook) throw new HttpError(404, "Book not found");
-    if (raw.remove_cover) raw.cover_url = "";
-    else if (!String(raw.cover_url || "").trim() && existingBook.cover_url) raw.cover_url = existingBook.cover_url;
+    if (raw.remove_cover) {
+      raw.cover_url = "";
+      await db.prepare("DELETE FROM book_cover_assets WHERE book_id=?").bind(bookId).run();
+    } else if (!String(raw.cover_url || "").trim() && existingBook.cover_url) {
+      raw.cover_url = existingBook.cover_url;
+    } else if (String(raw.cover_url||"").trim() && String(raw.cover_url||"").trim() !== String(existingBook.cover_url||"").trim()) {
+      await db.prepare("DELETE FROM book_cover_assets WHERE book_id=?").bind(bookId).run();
+    }
     const input = cleanBook(raw);
     const result = await db.prepare(`UPDATE books SET title=?,subtitle=?,authors_json=?,cover_url=?,series_name=?,series_number=?,description=?,genres_json=?,format_metadata=?,isbn=?,asin=?,publisher=?,publication_date=?,page_count=?,audiobook_runtime_seconds=?,narrators_json=?,language=?,personal_tags_json=?,favorite=?,status=?,book_dnf=?,updated_at=? WHERE id=?`).bind(
       input.title,input.subtitle,input.authors_json,input.cover_url,input.series_name,input.series_number,input.description,input.genres_json,input.format_metadata,input.isbn,input.asin,input.publisher,input.publication_date,input.page_count,input.audiobook_runtime_seconds,input.narrators_json,input.language,input.personal_tags_json,input.favorite,input.status,input.book_dnf,now(),bookId
@@ -916,6 +950,7 @@ async function handleApi(request, env, url) {
     if(!book)throw new HttpError(404,"Book not found");
     const reads=await all(db,"SELECT id FROM read_throughs WHERE book_id=?",bookId);
     const statements=[
+      db.prepare("DELETE FROM book_cover_assets WHERE book_id=?").bind(bookId),
       db.prepare("DELETE FROM shelf_books WHERE book_id=?").bind(bookId),
       db.prepare("DELETE FROM reading_sessions WHERE book_id=?").bind(bookId)
     ];
@@ -1565,10 +1600,17 @@ export default {
         await ensureSchema(env.DB);
         return widgetCurrentlyReadingPage(env.DB, url);
       }
+      const publicCoverMatch=url.pathname.match(/^\/covers\/([^/]+)$/);
+      if(publicCoverMatch && request.method==="GET"){
+        await ensureSchema(env.DB);
+        const asset=await first(env.DB,"SELECT content_type,data,updated_at FROM book_cover_assets WHERE book_id=?",decodeURIComponent(publicCoverMatch[1]));
+        if(!asset)return new Response("Not found",{status:404});
+        return new Response(asset.data,{headers:{"content-type":asset.content_type,"cache-control":"public, max-age=31536000, immutable","etag":`"${asset.updated_at}"`}});
+      }
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.35" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.36" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
