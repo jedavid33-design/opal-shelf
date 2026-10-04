@@ -521,7 +521,7 @@ function bookFields(book = {}, { editing = false } = {}) {
     : "";
   return `<div class="form-grid">
     ${field("Title","title",book.title,"text",true)}${field("Subtitle","subtitle",book.subtitle)}
-    ${field("Author(s), comma separated","authors",book.authors?.join(", "))}${field("Cover image URL","cover_url",book.cover_url,"url")}${coverRepair}
+    ${field("Author(s), comma separated","authors",book.authors?.join(", "))}${field("Cover image URL","cover_url",book.cover_url,"url")}<div class="field"><label for="cover_upload">Or upload cover image</label><input id="cover_upload" name="cover_upload" type="file" accept="image/jpeg,image/png,image/webp"><small class="subtle">JPEG, PNG, or WebP · max 5 MB</small></div>${coverRepair}
     ${field("Series","series_name",book.series_name)}${field("Series number","series_number",book.series_number,"number")}
     ${field("ISBN","isbn",book.isbn)}${field("ASIN","asin",book.asin)}${field("Publisher","publisher",book.publisher)}
     ${field("Publication date","publication_date",book.publication_date)}${field("Page count","page_count",book.page_count,"number")}
@@ -598,13 +598,26 @@ function formDataObject(form) {
   data.favorite=form.elements.favorite?.checked||false;
   data.remove_cover=form.elements.remove_cover?.checked||false;
   data.audiobook_runtime_seconds=runtimeFromFields(data.runtime_hours,data.runtime_minutes);
-  delete data.runtime_hours; delete data.runtime_minutes;
+  delete data.runtime_hours; delete data.runtime_minutes; delete data.cover_upload;
   return data;
+}
+
+async function uploadBookCover(bookId,file) {
+  if(!file || !file.size)return null;
+  if(file.size>5*1024*1024)throw new Error("Cover image must be 5 MB or smaller");
+  if(!["image/jpeg","image/png","image/webp"].includes(file.type))throw new Error("Cover must be a JPEG, PNG, or WebP image");
+  return api(`/api/books/${bookId}/cover`,{method:"PUT",body:file,headers:{"content-type":file.type}});
 }
 
 async function saveBook(event) {
   event.preventDefault();
-  try { await api("/api/books",{method:"POST",body:JSON.stringify(formDataObject(event.currentTarget))}); formDialog.close(); await refresh(); toast("Book added to your shelf"); }
+  const form=event.currentTarget;
+  const file=form.elements.cover_upload?.files?.[0]||null;
+  try {
+    const book=await api("/api/books",{method:"POST",body:JSON.stringify(formDataObject(form))});
+    if(file)await uploadBookCover(book.id,file);
+    formDialog.close(); await refresh(); toast(file?"Book and cover added to your shelf":"Book added to your shelf");
+  }
   catch(error){ toast(error.message); }
 }
 
@@ -898,10 +911,13 @@ function openEditBook(book) {
     }catch(error){toast(error.message);}
   });
   form.addEventListener("submit",async(event)=>{event.preventDefault();try{
+    const file=event.currentTarget.elements.cover_upload?.files?.[0]||null;
     const data=formDataObject(event.currentTarget);
-    if(!data.remove_cover && !String(data.cover_url||"").trim() && book.cover_url)data.cover_url=book.cover_url;
+    if(file){ data.remove_cover=false; data.cover_url=book.cover_url||""; }
+    else if(!data.remove_cover && !String(data.cover_url||"").trim() && book.cover_url)data.cover_url=book.cover_url;
     await api(`/api/books/${book.id}`,{method:"PUT",body:JSON.stringify(data)});
-    formDialog.close();await refresh();toast("Book updated");
+    if(file)await uploadBookCover(book.id,file);
+    formDialog.close();await refresh();toast(file?"Book and uploaded cover updated":"Book updated");
   }catch(error){toast(error.message);}});
 }
 
