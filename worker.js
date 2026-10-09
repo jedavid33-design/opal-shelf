@@ -1,4 +1,4 @@
-// Opal Shelf Worker v0.0.39 is intentionally self-contained for Cloudflare's
+// Opal Shelf Worker v0.0.40 is intentionally self-contained for Cloudflare's
 // single-file dashboard editor. Do not replace these helpers with relative imports.
 const id = (prefix = "id") => `${prefix}_${crypto.randomUUID()}`;
 
@@ -315,7 +315,10 @@ async function widgetCurrentlyReading(db, url) {
     activity[checkin.session_date].pages += Number(checkin.pages_read || 0);
   }
   const streak = computeStreak(goals, activity, today);
-  return { today, books, streak };
+  // All completed sessions for the date, across every book/read-through,
+  // using the same aggregate (including correction rows) as the dashboard.
+  const totalSecondsToday = Math.max(0, Number(activity[today]?.seconds || 0));
+  return { today, books, streak, total_seconds_today: totalSecondsToday };
 }
 
 
@@ -336,7 +339,7 @@ async function widgetCurrentlyReadingPage(db, url) {
   const cover = escapeWidgetHtml(book?.cover_url || "");
   const percentValue = book?.progress_percent == null ? null : Math.max(0, Math.min(100, Math.round(Number(book.progress_percent))));
   const percent = percentValue == null ? "—" : percentValue + "%";
-  const minutes = Math.max(0, Math.round(Number(book?.seconds_today || 0) / 60));
+  const minutes = Math.max(0, Math.round(Number(data.total_seconds_today || 0) / 60));
   const timeLabel = minutes + " min today";
   const streakDays = Math.max(0, Number(data.streak?.current || 0));
   const streakLabel = streakDays + " day" + (streakDays === 1 ? "" : "s") + " streak";
@@ -1615,7 +1618,7 @@ export default {
       if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") return cors(new Response(null, { status: 204 }), request, env);
       if (url.pathname.startsWith("/api/")) return cors(await handleApi(request, env, url), request, env);
       if (url.pathname === "/" || url.pathname === "/health") {
-        return json({ ok: true, app: "Opal Shelf API", version: "0.0.39" });
+        return json({ ok: true, app: "Opal Shelf API", version: "0.0.40" });
       }
       throw new HttpError(404, "Not found");
     } catch (error) {
