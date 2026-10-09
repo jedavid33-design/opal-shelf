@@ -8,11 +8,17 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.39
+- Version: 0.0.40
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
 - Strict rule: no paid catalog/API services.
+
+## v0.0.40 — widget daily total across all books (2026-10-09)
+- The Currently Reading Widgy card still shows the manually selected book's cover, title, author, and progress.
+- The `min today` line now uses the same day's total completed reading-session seconds across **all** books/read-throughs as Shelf's dashboard, including inferred-session adjustment rows. It is no longer limited to sessions on the featured book.
+- The underlying widget JSON adds `total_seconds_today` while preserving the per-book `seconds_today` field for backwards compatibility.
+- Cloudflare Worker redeploy required; the existing Widgy screenshot URL and design remain unchanged.
 
 ## v0.0.33 — widget reading streak (2026-10-03)
 - The live small Widgy renderer now includes Julie's existing Opal Shelf current reading streak.
