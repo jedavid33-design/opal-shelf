@@ -8,11 +8,18 @@
 - After a push, state whether Cloudflare Worker deployment or any other Cloudflare action is required.
 
 ## Current build
-- Version: 0.0.40
+- Frontend version: 0.0.41
+- Worker version: 0.0.40 (unchanged; no redeploy needed)
 - Status before this build: green.
 - No ratings.
 - Font/UI direction: Avenir Next with the “Opal treatment”.
 - Strict rule: no paid catalog/API services.
+
+## v0.0.41 — Want to Read export (2026-10-16)
+- Added **Shelf → Export Want to Read**, available when at least one book has `status: "want"`.
+- Modal offers **Copy List** (numbered title, author, series) and **Download JSON** (metadata-only, compatible with Opal Shelf Import v1).
+- Excludes all other book statuses, reading history, sessions, account credentials, and internal book identifiers. No Worker endpoint or paid service added.
+- Frontend-only change; Cloudflare Pages will redeploy after GitHub commit. Cloudflare Worker v0.0.40 stays as-is.
 
 ## v0.0.40 — widget daily total across all books (2026-10-09)
 - The Currently Reading Widgy card still shows the manually selected book's cover, title, author, and progress.
