@@ -325,7 +325,7 @@ function shelfView() {
   const finished = visible.filter((book)=>book.status==="finished");
   const custom = state.data.shelves.map((shelf)=>[shelf.name, visible.filter((book)=>state.data.memberships.some((m)=>m.shelf_id===shelf.id&&m.book_id===book.id)),shelf]);
 
-  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">Current reads stay face-out. Want to Read and Finished live on the shelf as spines — tap one to pull it out and see the front.</p></div><div class="form-actions"><button class="button" id="import-books">⇩ Import Books</button><button class="button" id="new-shelf">＋ New Shelf</button></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">The whole collection</p><h1>Your Shelf</h1><p class="subtle">Current reads stay face-out. Want to Read and Finished live on the shelf as spines — tap one to pull it out and see the front.</p></div><div class="form-actions"><button class="button" id="import-books">⇩ Import Books</button><button class="button" id="export-want-books" ${want.length?"":"disabled"}>⇧ Export Want to Read</button><button class="button" id="new-shelf">＋ New Shelf</button></div></div>
     ${reading.length ? bookshelf("Reading",reading) : ""}
     ${want.length ? spineBookshelf("Want to Read",want,"want") : ""}
     ${finished.length ? spineBookshelf("Finished Reading",finished,"finished") : ""}
@@ -380,7 +380,7 @@ function goalsView() {
 }
 
 function settingsView() {
-  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.28</p><h1>Settings</h1></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">Opal Shelf v0.0.41</p><h1>Settings</h1></div></div>
     <section class="panel"><h2>Connection</h2><p class="subtle">Your books and reading history live in your private Opal Shelf database.</p>
       <form id="token-form"><div class="field"><label for="access-token">Access token (only if enabled on your Worker)</label><input id="access-token" name="token" type="password" autocomplete="off" value="${esc(localStorage.getItem("opalShelfAccessToken")||"")}"></div><div class="form-actions"><button class="button primary">Save Token</button></div></form>
     </section>
@@ -400,6 +400,7 @@ function bindView() {
   app.querySelectorAll("[data-timer-action]").forEach((el)=>el.addEventListener("click",()=>timerAction(el.dataset.timerAction,el.dataset.read,{focusReadId:el.dataset.read})));
   document.querySelector("#new-shelf")?.addEventListener("click",()=>shelfForm());
   document.querySelector("#import-books")?.addEventListener("click",openBookImport);
+  document.querySelector("#export-want-books")?.addEventListener("click",openWantToReadExport);
   app.querySelectorAll("[data-rename-shelf]").forEach((el)=>el.addEventListener("click",()=>shelfForm(el.dataset.renameShelf)));
   app.querySelectorAll("[data-delete-shelf]").forEach((el)=>el.addEventListener("click",()=>deleteShelf(el.dataset.deleteShelf)));
   document.querySelector("#daily-goal-form")?.addEventListener("submit",saveDailyGoal);
@@ -422,6 +423,75 @@ async function timerAction(action,readId,refreshOptions={}) {
   } catch (error) { toast(error.message); }
 }
 
+
+function wantToReadExportBooks() {
+  return state.data.books.filter(book => book.status === "want")
+    .sort((a,b) => String(a.title || "").localeCompare(String(b.title || ""), undefined, {sensitivity:"base"}));
+}
+
+function wantToReadListText(books) {
+  const lines = books.map((book,index) => {
+    const by = Array.isArray(book.authors) ? book.authors.filter(Boolean).join(", ") : String(book.authors || "");
+    const series = book.series_name ? ` (${book.series_name}${book.series_number ? ` #${book.series_number}` : ""})` : "";
+    return `${index+1}. ${book.title}${by ? ` — ${by}` : ""}${series}`;
+  });
+  return `Opal Shelf — Want to Read (${books.length} books)\n\n${lines.join("\n")}`;
+}
+
+function wantToReadExportJson(books) {
+  const fields = ["title","subtitle","authors","series_name","series_number","genres","personal_tags","description",
+    "isbn","asin","cover_url","publisher","publication_date","page_count",
+    "audiobook_runtime_seconds","narrators","language","format_metadata","favorite"];
+  return {
+    format:"opal-shelf-import",
+    version:1,
+    books: books.map(book => {
+      const result = {};
+      for (const field of fields) if (book[field] !== undefined && book[field] !== null) result[field] = book[field];
+      result.status = "want";
+      return result;
+    })
+  };
+}
+
+function downloadWantToReadExport(books) {
+  const blob = new Blob([JSON.stringify(wantToReadExportJson(books), null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `opal-shelf-want-to-read-${dateKey()}.json`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  toast(`${books.length} Want to Read books exported`);
+}
+
+function openWantToReadExport() {
+  const books = wantToReadExportBooks();
+  if (!books.length) { toast("Your Want to Read shelf is empty"); return; }
+  const list = wantToReadListText(books);
+  formDialogContent(`<button class="modal-close" data-close aria-label="Close">×</button>
+    <p class="eyebrow">Share your reading shortlist</p><h1>Export Want to Read</h1>
+    <p>${books.length} book${books.length === 1 ? "" : "s"} ready to share. Copy the titles and authors into ChatGPT, or download a JSON file containing your book metadata.</p>
+    <p class="subtle">No reading history, session details, or account credentials are included. The JSON is compatible with Opal Shelf Import v1.</p>
+    <div class="form-actions"><button type="button" class="button primary" id="copy-want-books">Copy List</button>
+      <button type="button" class="button" id="download-want-books">⇩ Download JSON</button></div>
+    <div class="field"><label for="want-export-preview">List preview</label>
+      <textarea id="want-export-preview" rows="8" readonly>${esc(list)}</textarea></div>`);
+  document.querySelector("#copy-want-books").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(list);
+      toast(`${books.length} books copied. Paste them into ChatGPT!`);
+    } catch {
+      const preview = document.querySelector("#want-export-preview");
+      preview.focus();
+      preview.select();
+      toast("Select Copy to copy the highlighted list");
+    }
+  });
+  document.querySelector("#download-want-books").addEventListener("click", () => downloadWantToReadExport(books));
+}
 
 function normalizeImportAuthors(value){
   if(Array.isArray(value))return value.map(String).map(v=>v.trim()).filter(Boolean);
